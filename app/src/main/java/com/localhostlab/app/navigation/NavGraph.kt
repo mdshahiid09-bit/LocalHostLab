@@ -4,6 +4,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavHostController
@@ -140,7 +142,8 @@ fun LocalHostLabNavGraph(
         ) { backStackEntry ->
             val projectId = backStackEntry.arguments?.getString("projectId") ?: ""
             val project = repository.getProject(projectId)
-            val port = project?.port ?: 3000
+            val activePort by runner.activePort.collectAsState()
+            val port = activePort ?: project?.port ?: 3000
 
             PreviewScreen(
                 port = port,

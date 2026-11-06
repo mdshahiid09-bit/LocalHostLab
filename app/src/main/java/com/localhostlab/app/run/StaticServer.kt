@@ -173,6 +173,26 @@ class StaticServer(
             }
         }
 
+        // Hashed vs Unhashed bundle tolerance:
+        // If /assets/index-D7h5wQ1a.css requested but disk only has index.css (or vice-versa), serve it!
+        if (!fileToServe.exists() && targetPath.contains("/assets/")) {
+            val ext = targetPath.substringAfterLast('.', "").lowercase()
+            if (ext == "css" || ext == "js") {
+                val altFile = File(staticDir, "assets/index.$ext")
+                if (altFile.exists() && altFile.isFile && altFile.canonicalPath.startsWith(canonicalStaticDir)) {
+                    fileToServe = altFile
+                } else {
+                    val assetsFolder = File(staticDir, "assets")
+                    if (assetsFolder.exists() && assetsFolder.isDirectory) {
+                        val match = assetsFolder.listFiles()?.firstOrNull { it.isFile && it.extension.equals(ext, ignoreCase = true) }
+                        if (match != null && match.canonicalPath.startsWith(canonicalStaticDir)) {
+                            fileToServe = match
+                        }
+                    }
+                }
+            }
+        }
+
         // SPA Fallback:
         // Only non-asset paths (HTML navigation / client routes) fallback to index.html.
         // Asset requests must 404 if missing, so browsers do not misinterpret HTML as JS or CSS.

@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
@@ -274,14 +275,26 @@ fun ProjectScreen(
                         if (project?.status == ProjectStatus.RUNNING && (activePort != null || project?.port != null)) {
                             val port = activePort ?: project?.port ?: 3000
                             Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = "Localhost URL: http://127.0.0.1:$port/",
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    color = MaterialTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.clickable { onOpenPreview(viewModel.projectId) }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.OpenInBrowser,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp)
                                 )
-                            )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "http://127.0.0.1:$port/ (Tap to Preview)",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                )
+                            }
                         }
                     }
                 }
@@ -315,8 +328,17 @@ fun ProjectScreen(
                     }
 
                     FilledTonalButton(
-                        onClick = { onOpenPreview(viewModel.projectId) },
-                        enabled = (isRunning || project?.status == ProjectStatus.RUNNING) && activePort != null && project?.status != ProjectStatus.ERROR,
+                        onClick = {
+                            if (!isRunning && project?.status != ProjectStatus.RUNNING) {
+                                viewModel.runProject()
+                            }
+                            onOpenPreview(viewModel.projectId)
+                        },
+                        enabled = true,
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
                         modifier = Modifier.weight(1.2f)
                     ) {
                         Icon(imageVector = Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(18.dp))

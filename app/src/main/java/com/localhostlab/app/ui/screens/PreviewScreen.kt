@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -51,6 +52,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -70,6 +73,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.localhostlab.app.run.ProjectRunner
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -85,13 +89,29 @@ fun PreviewScreen(
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    var currentUrl by remember(port) { mutableStateOf("http://127.0.0.1:$port/") }
-    var urlInput by remember(port) { mutableStateOf("http://127.0.0.1:$port/") }
+    val activePort by (runner?.activePort ?: MutableStateFlow(null)).collectAsState()
+    val currentStepName by (runner?.currentStepName ?: MutableStateFlow(null)).collectAsState()
+    val stepProgress by (runner?.stepProgress ?: MutableStateFlow(null)).collectAsState()
+
+    val effectivePort = activePort ?: port
+    var currentUrl by remember(effectivePort) { mutableStateOf("http://127.0.0.1:$effectivePort/") }
+    var urlInput by remember(effectivePort) { mutableStateOf("http://127.0.0.1:$effectivePort/") }
 
     var webViewInstance by remember { mutableStateOf<WebView?>(null) }
     var webProgress by remember { mutableIntStateOf(0) }
     var isPageLoading by remember { mutableStateOf(true) }
     var pageError by remember { mutableStateOf<String?>(null) }
+    var retryCount by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(effectivePort) {
+        if (effectivePort > 0) {
+            val target = "http://127.0.0.1:$effectivePort/"
+            currentUrl = target
+            urlInput = target
+            pageError = null
+            webViewInstance?.loadUrl(target)
+        }
+    }
 
     BackHandler {
         if (webViewInstance?.canGoBack() == true) {
@@ -234,6 +254,7 @@ fun PreviewScreen(
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     super.onPageFinished(view, url)
                                     isPageLoading = false
+                                    retryCount = 0
                                     if (url != null) {
                                         currentUrl = url
                                         urlInput = url
@@ -254,8 +275,18 @@ fun PreviewScreen(
                                     runner?.appendLog(logMsg)
 
                                     if (request?.isForMainFrame == true) {
-                                        pageError = "Error $errorCode: $desc"
-                                        isPageLoading = false
+                                        if ((errorCode == WebViewClient.ERROR_CONNECT || errorCode == WebViewClient.ERROR_HOST_LOOKUP) && retryCount < 5) {
+                                            retryCount++
+                                            coroutineScope.launch {
+                                                kotlinx.coroutines.delay(800)
+                                                if (pageError == null) {
+                                                    view?.loadUrl(currentUrl)
+                                                }
+                                            }
+                                        } else {
+                                            pageError = "Error $errorCode: $desc"
+                                            isPageLoading = false
+                                        }
                                     }
                                 }
 
@@ -355,6 +386,7 @@ fun PreviewScreen(
                                 Spacer(modifier = Modifier.height(16.dp))
                                 Button(
                                     onClick = {
+                                        retryCount = 0
                                         pageError = null
                                         isPageLoading = true
                                         webViewInstance?.loadUrl(currentUrl)
@@ -363,6 +395,56 @@ fun PreviewScreen(
                                     Icon(imageVector = Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text("Retry Loading")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Starting / Building state overlay
+                if (activePort == null && currentStepName != null && pageError == null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background)
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Card(
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(48.dp),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Text(
+                                    text = "Starting Localhost Server...",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = currentStepName ?: "Preparing project files...",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textAlign = TextAlign.Center
+                                )
+                                if (stepProgress != null) {
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    LinearProgressIndicator(
+                                        progress = { stepProgress ?: 0f },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(6.dp),
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
                                 }
                             }
                         }

@@ -9,6 +9,7 @@ import com.localhostlab.app.data.ProjectStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -268,6 +269,7 @@ class ProjectRunner(
                 }
 
                 val port = serverResult.getOrThrow()
+                _activePort.value = port
 
                 // Step 4: Health Check - HTTP GET to http://127.0.0.1:<port>/
                 _currentStepName.value = "Step 3/3: Verifying server health..."
@@ -284,35 +286,41 @@ class ProjectRunner(
                 var healthErrorDetail: String? = null
                 var first300Chars: String? = null
 
-                try {
-                    val url = URL("http://127.0.0.1:$port/")
-                    val conn = (url.openConnection() as HttpURLConnection).apply {
-                        connectTimeout = 4000
-                        readTimeout = 4000
-                        requestMethod = "GET"
-                        instanceFollowRedirects = true
-                    }
-                    healthStatus = conn.responseCode
-                    val contentType = conn.contentType ?: ""
-                    val body = conn.inputStream.bufferedReader().use { it.readText() }
+                var attempts = 0
+                while (attempts < 5 && !healthOk && isActive) {
+                    attempts++
+                    try {
+                        val url = URL("http://127.0.0.1:$port/")
+                        val conn = (url.openConnection() as HttpURLConnection).apply {
+                            connectTimeout = 3000
+                            readTimeout = 3000
+                            requestMethod = "GET"
+                            instanceFollowRedirects = true
+                        }
+                        healthStatus = conn.responseCode
+                        val contentType = conn.contentType ?: ""
+                        val body = conn.inputStream.bufferedReader().use { it.readText() }
 
-                    val isHtml = contentType.contains("text/html", ignoreCase = true) ||
-                            body.contains("<html", ignoreCase = true) ||
-                            body.contains("<!doctype html", ignoreCase = true)
+                        val isHtml = contentType.contains("text/html", ignoreCase = true) ||
+                                body.contains("<html", ignoreCase = true) ||
+                                body.contains("<!doctype html", ignoreCase = true)
 
-                    if (healthStatus == 200 && isHtml && body.isNotBlank()) {
-                        healthOk = true
-                        first300Chars = body.take(300)
-                        appendLog("[LocalHostLab] HTTP 200 OK received from http://127.0.0.1:$port/ (Content-Type: $contentType, Size: ${body.length} bytes)")
-                        appendLog("[LocalHostLab] First 300 characters of returned HTML:")
-                        appendLog("--------------------------------------------------")
-                        appendLog(first300Chars)
-                        appendLog("--------------------------------------------------")
-                    } else {
-                        healthErrorDetail = "HTTP Status: $healthStatus, Content-Type: '$contentType', isHtml: $isHtml"
+                        if (healthStatus == 200 && isHtml && body.isNotBlank()) {
+                            healthOk = true
+                            first300Chars = body.take(300)
+                            appendLog("[LocalHostLab] HTTP 200 OK received from http://127.0.0.1:$port/ (Content-Type: $contentType, Size: ${body.length} bytes)")
+                            appendLog("[LocalHostLab] First 300 characters of returned HTML:")
+                            appendLog("--------------------------------------------------")
+                            appendLog(first300Chars)
+                            appendLog("--------------------------------------------------")
+                            break
+                        } else {
+                            healthErrorDetail = "HTTP Status: $healthStatus, Content-Type: '$contentType', isHtml: $isHtml"
+                        }
+                    } catch (e: Exception) {
+                        healthErrorDetail = "Connection attempt $attempts failed: ${e.message}"
+                        delay(250)
                     }
-                } catch (e: Exception) {
-                    healthErrorDetail = "Connection failed: ${e.message}"
                 }
 
                 // If health check fails, STOP SERVER FIRST, record failure, and exit immediately!
@@ -340,35 +348,41 @@ class ProjectRunner(
                     var assetErr: String? = null
                     val assetUrlStr = "http://127.0.0.1:$port/$assetRel"
 
-                    try {
-                        val assetUrl = URL(assetUrlStr)
-                        val conn = (assetUrl.openConnection() as HttpURLConnection).apply {
-                            connectTimeout = 3000
-                            readTimeout = 3000
-                            requestMethod = "GET"
-                        }
-                        val assetStatus = conn.responseCode
-                        val assetContentType = conn.contentType ?: "unknown"
-                        val bytes = conn.inputStream.use { it.readBytes() }
-                        val byteSize = bytes.size
+                    var assetAttempts = 0
+                    while (assetAttempts < 3 && !assetPass && isActive) {
+                        assetAttempts++
+                        try {
+                            val assetUrl = URL(assetUrlStr)
+                            val conn = (assetUrl.openConnection() as HttpURLConnection).apply {
+                                connectTimeout = 3000
+                                readTimeout = 3000
+                                requestMethod = "GET"
+                            }
+                            val assetStatus = conn.responseCode
+                            val assetContentType = conn.contentType ?: "unknown"
+                            val bytes = conn.inputStream.use { it.readBytes() }
+                            val byteSize = bytes.size
 
-                        val ext = assetRel.substringAfterLast('.', "")
-                        val expectedType = server.getMimeType(ext).substringBefore(';')
-                        val actualBaseType = assetContentType.substringBefore(';').trim()
+                            val ext = assetRel.substringAfterLast('.', "")
+                            val expectedType = server.getMimeType(ext).substringBefore(';')
+                            val actualBaseType = assetContentType.substringBefore(';').trim()
 
-                        if (assetStatus == 200 && (expectedType.isEmpty() || actualBaseType.equals(expectedType, ignoreCase = true) || assetContentType.contains(expectedType, ignoreCase = true))) {
-                            assetPass = true
-                            appendLog("[LocalHostLab] GET $assetUrlStr -> HTTP $assetStatus (Content-Type: $assetContentType, Size: $byteSize bytes) [PASS]")
-                            val sample = String(bytes.take(300).toByteArray(), Charsets.UTF_8)
-                            appendLog("[LocalHostLab] First 300 chars of $assetRel:")
-                            appendLog("--------------------------------------------------")
-                            appendLog(sample)
-                            appendLog("--------------------------------------------------")
-                        } else {
-                            assetErr = "HTTP $assetStatus (Content-Type: $assetContentType, expected: $expectedType)"
+                            if (assetStatus == 200 && (expectedType.isEmpty() || actualBaseType.equals(expectedType, ignoreCase = true) || assetContentType.contains(expectedType, ignoreCase = true))) {
+                                assetPass = true
+                                appendLog("[LocalHostLab] GET $assetUrlStr -> HTTP $assetStatus (Content-Type: $assetContentType, Size: $byteSize bytes) [PASS]")
+                                val sample = String(bytes.take(300).toByteArray(), Charsets.UTF_8)
+                                appendLog("[LocalHostLab] First 300 chars of $assetRel:")
+                                appendLog("--------------------------------------------------")
+                                appendLog(sample)
+                                appendLog("--------------------------------------------------")
+                                break
+                            } else {
+                                assetErr = "HTTP $assetStatus (Content-Type: $assetContentType, expected: $expectedType)"
+                            }
+                        } catch (e: Exception) {
+                            assetErr = "Request attempt $assetAttempts failed: ${e.message}"
+                            delay(200)
                         }
-                    } catch (e: Exception) {
-                        assetErr = "Request failed: ${e.message}"
                     }
 
                     // If any asset fails verification: STOP SERVER FIRST, record failure, and exit!
