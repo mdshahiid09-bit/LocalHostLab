@@ -120,11 +120,20 @@ class StaticServer(
                     return
                 }
 
+                // Base path / subpath tolerance (e.g. /nexfolio/assets/ or /subpath/assets/)
+                if (!fileToServe.exists() && targetPath.contains("/assets/")) {
+                    val assetSub = "assets/" + targetPath.substringAfter("/assets/")
+                    val candidate = File(staticDir, assetSub)
+                    if (candidate.exists() && candidate.isFile && candidate.canonicalPath.startsWith(canonicalStaticDir)) {
+                        fileToServe = candidate
+                    }
+                }
+
                 // SPA Fallback:
                 // If the exact file doesn't exist, check whether it's an unknown client-side route
                 // or if it's an asset. If not an existing file, fallback to dist/index.html.
                 if (!fileToServe.exists() || fileToServe.isDirectory) {
-                    val isAssetRequest = targetPath.startsWith("/assets/") ||
+                    val isAssetRequest = targetPath.startsWith("/assets/") || targetPath.contains("/assets/") ||
                             (targetPath.substringAfterLast('/').contains('.') && !targetPath.endsWith(".html"))
 
                     if (!isAssetRequest) {

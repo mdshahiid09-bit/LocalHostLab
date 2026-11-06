@@ -144,6 +144,8 @@ fun LocalHostLabNavGraph(
 
             PreviewScreen(
                 port = port,
+                projectId = projectId,
+                runner = runner,
                 onBackClick = { navController.popBackStack() }
             )
         }

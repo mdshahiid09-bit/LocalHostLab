@@ -74,7 +74,7 @@ class ProjectRunner(
         _lastFailure.value = null
     }
 
-    private fun appendLog(line: String) {
+    fun appendLog(line: String) {
         val updated = _logs.value.toMutableList()
         updated.add(line)
         _logs.value = updated
@@ -102,6 +102,35 @@ class ProjectRunner(
             appendLog("[LocalHostLab] =======================================")
 
             currentJob = scope.launch(Dispatchers.IO) {
+                // Pre-check: inspect vite.config for any 'base' setting that might affect paths
+                val viteConfigFiles = listOf(
+                    File(workingDir, "vite.config.ts"),
+                    File(workingDir, "vite.config.js"),
+                    File(workingDir, "vite.config.mjs")
+                )
+                val activeViteConfig = viteConfigFiles.find { it.exists() }
+                if (activeViteConfig != null) {
+                    try {
+                        val cfgText = activeViteConfig.readText()
+                        val baseMatch = Regex("""base\s*:\s*['"]([^'"]+)['"]""").find(cfgText)
+                        if (baseMatch != null) {
+                            val baseVal = baseMatch.groupValues[1]
+                            appendLog("[LocalHostLab] vite.config check: Found base = '$baseVal'. Notice: ensure asset requests match.")
+                        } else {
+                            appendLog("[LocalHostLab] vite.config check: Standard root base '/' (root relative paths).")
+                        }
+                    } catch (e: Exception) {
+                        appendLog("[LocalHostLab] Warning: could not parse ${activeViteConfig.name}: ${e.message}")
+                    }
+                }
+
+                // Step 0: Always delete old dist/ before real build to ensure no stale artifacts
+                val distDir = File(workingDir, "dist")
+                if (distDir.exists()) {
+                    appendLog("[LocalHostLab] Deleting existing dist/ folder for clean build...")
+                    distDir.deleteRecursively()
+                }
+
                 // Step 1: npm install (always run for real)
                 _currentStepName.value = "Step 1/3: npm install"
                 _stepProgress.value = 0.25f
@@ -139,7 +168,6 @@ class ProjectRunner(
                 }
 
                 // Verify dist/ and dist/index.html actually exists and is non-empty
-                val distDir = File(workingDir, "dist")
                 val indexHtml = File(distDir, "index.html")
                 if (!distDir.exists() || !indexHtml.exists() || indexHtml.length() == 0L) {
                     val size = if (indexHtml.exists()) indexHtml.length() else 0L
@@ -151,12 +179,27 @@ class ProjectRunner(
 
                 appendLog("[LocalHostLab] Build validation successful: dist/index.html verified (${indexHtml.length()} bytes).")
 
-                // Log all files in dist/ folder
+                // Log all files in dist/ folder with sizes
                 val distFiles = distDir.walkTopDown().filter { it.isFile }.toList()
                 appendLog("[LocalHostLab] Serving files from dist/ (${distFiles.size} files):")
                 distFiles.forEach { f ->
                     val relPath = f.relativeTo(distDir).path
                     appendLog("[LocalHostLab]   - $relPath (${f.length()} bytes)")
+                }
+
+                // Check that every /assets/ path referenced in dist/index.html exists on disk
+                val indexContent = indexHtml.readText()
+                val assetMatches = Regex("""(?:src|href)=['"](?:/|\./)?(assets/[^'"]+)['"]""").findAll(indexContent)
+                val referencedAssets = assetMatches.map { it.groupValues[1] }.distinct().toList()
+
+                appendLog("[LocalHostLab] Checking referenced assets from dist/index.html (${referencedAssets.size} assets):")
+                referencedAssets.forEach { assetRel ->
+                    val diskAsset = File(distDir, assetRel)
+                    if (diskAsset.exists()) {
+                        appendLog("[LocalHostLab]   [OK] $assetRel (${diskAsset.length()} bytes)")
+                    } else {
+                        appendLog("[LocalHostLab]   [WARNING] $assetRel referenced in index.html but not found on disk in dist/!")
+                    }
                 }
 
                 // Step 3: Start static HTTP server on 127.0.0.1 (starting at port 3000)
@@ -225,6 +268,32 @@ class ProjectRunner(
                     stopInternal()
                     handleFailure("Step 3/3: Server Health Check (GET http://127.0.0.1:$port/)", project, customSuggestion = errMsg)
                     return@launch
+                }
+
+                // Verify every /assets/ file referenced by making HTTP GET to it
+                referencedAssets.forEach { assetRel ->
+                    try {
+                        val assetUrl = URL("http://127.0.0.1:$port/$assetRel")
+                        val conn = (assetUrl.openConnection() as HttpURLConnection).apply {
+                            connectTimeout = 3000
+                            readTimeout = 3000
+                            requestMethod = "GET"
+                        }
+                        val assetStatus = conn.responseCode
+                        val assetContentType = conn.contentType ?: "unknown"
+                        val assetSample = try {
+                            conn.inputStream.bufferedReader().use { it.readText().take(300) }
+                        } catch (e: Exception) {
+                            "Error reading stream: ${e.message}"
+                        }
+                        appendLog("[LocalHostLab] GET http://127.0.0.1:$port/$assetRel -> HTTP $assetStatus (Content-Type: $assetContentType)")
+                        appendLog("[LocalHostLab] First 300 chars of $assetRel:")
+                        appendLog("--------------------------------------------------")
+                        appendLog(assetSample)
+                        appendLog("--------------------------------------------------")
+                    } catch (e: Exception) {
+                        appendLog("[LocalHostLab] Failed to fetch asset http://127.0.0.1:$port/$assetRel: ${e.message}")
+                    }
                 }
 
                 // ONLY mark project RUNNING after 200 OK verified
@@ -299,42 +368,30 @@ class ProjectRunner(
                 repository.updateProjectStatus(project.id, ProjectStatus.IDLE)
                 appendLog("[LocalHostLab] Project ${project.name} stopped.")
             }
-            try {
-                ServerForegroundService.stopService(context)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+            _runningProject.value = null
+            _activePort.value = null
+            _currentStepName.value = null
+            _stepProgress.value = null
         }
     }
 
     private suspend fun stopInternal() {
-        currentJob?.cancel()
-        currentJob = null
-
-        // Stop active running process if any
-        nodeEngine.stopActiveProcess()
-
-        currentServer?.stop()
-        currentServer = null
-
-        _activePort.value = null
-        _currentStepName.value = null
-        _stepProgress.value = null
-        _runningProject.value = null
+        try {
+            currentJob?.cancel()
+            currentJob = null
+            currentServer?.stop()
+            currentServer = null
+            nodeEngine.stopActiveProcess()
+            ServerForegroundService.stopService(context)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
-    fun copyLogsToClipboard(context: Context) {
-        val text = _logs.value.joinToString("\n")
+    fun copyLogsToClipboard() {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        val clip = ClipData.newPlainText("LocalHostLab Logs", text)
-        clipboard.setPrimaryClip(clip)
-    }
-
-    fun copyFailureLogsToClipboard(context: Context) {
-        val failure = _lastFailure.value ?: return
-        val text = "Step: ${failure.stepName}\nSuggestion: ${failure.fixSuggestion}\n\n" + failure.last20Logs.joinToString("\n")
-        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        val clip = ClipData.newPlainText("LocalHostLab Error Logs", text)
+        val allLogs = _logs.value.joinToString("\n")
+        val clip = ClipData.newPlainText("LocalHostLab Build & Server Console", allLogs)
         clipboard.setPrimaryClip(clip)
     }
 }

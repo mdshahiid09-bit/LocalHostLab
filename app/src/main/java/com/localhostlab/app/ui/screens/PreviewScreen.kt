@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
+import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -68,6 +69,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.localhostlab.app.run.ProjectRunner
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -75,6 +77,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun PreviewScreen(
     port: Int,
+    projectId: String = "",
+    runner: ProjectRunner? = null,
     onBackClick: () -> Unit
 ) {
     val context = LocalContext.current
@@ -122,17 +126,18 @@ fun PreviewScreen(
                                             target = "http://$target"
                                         }
                                         currentUrl = target
+                                        urlInput = target
                                         pageError = null
                                         webViewInstance?.loadUrl(target)
                                     }
                                 ),
                                 textStyle = TextStyle(
                                     fontFamily = FontFamily.Monospace,
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
                                 ),
                                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier.weight(1f)
                             )
                         }
                     }
@@ -145,6 +150,7 @@ fun PreviewScreen(
                 actions = {
                     IconButton(onClick = {
                         pageError = null
+                        isPageLoading = true
                         webViewInstance?.reload()
                     }) {
                         Icon(imageVector = Icons.Default.Refresh, contentDescription = "Refresh")
@@ -183,7 +189,7 @@ fun PreviewScreen(
         ) {
             if (isPageLoading && pageError == null) {
                 LinearProgressIndicator(
-                    progress = (webProgress.coerceIn(0, 100)) / 100f,
+                    progress = { (webProgress.coerceIn(0, 100)) / 100f },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(3.dp),
@@ -240,9 +246,14 @@ fun PreviewScreen(
                                     error: WebResourceError?
                                 ) {
                                     super.onReceivedError(view, request, error)
+                                    val reqUrl = request?.url?.toString() ?: "unknown"
+                                    val errorCode = error?.errorCode ?: -1
+                                    val desc = error?.description?.toString() ?: "Failed to load resource"
+                                    val logMsg = "[Resource Error $errorCode] $reqUrl: $desc"
+                                    android.util.Log.e("PreviewWebView", logMsg)
+                                    runner?.appendLog(logMsg)
+
                                     if (request?.isForMainFrame == true) {
-                                        val errorCode = error?.errorCode ?: -1
-                                        val desc = error?.description?.toString() ?: "Failed to load page"
                                         pageError = "Error $errorCode: $desc"
                                         isPageLoading = false
                                     }
@@ -254,9 +265,14 @@ fun PreviewScreen(
                                     errorResponse: WebResourceResponse?
                                 ) {
                                     super.onReceivedHttpError(view, request, errorResponse)
+                                    val reqUrl = request?.url?.toString() ?: "unknown"
+                                    val statusCode = errorResponse?.statusCode ?: -1
+                                    val reason = errorResponse?.reasonPhrase ?: "HTTP Error"
+                                    val logMsg = "[HTTP Error $statusCode] $reqUrl: $reason"
+                                    android.util.Log.e("PreviewWebView", logMsg)
+                                    runner?.appendLog(logMsg)
+
                                     if (request?.isForMainFrame == true) {
-                                        val statusCode = errorResponse?.statusCode ?: -1
-                                        val reason = errorResponse?.reasonPhrase ?: "HTTP Error"
                                         pageError = "HTTP Error $statusCode: $reason"
                                         isPageLoading = false
                                     }
@@ -269,6 +285,19 @@ fun PreviewScreen(
                                     if (newProgress >= 100) {
                                         isPageLoading = false
                                     }
+                                }
+
+                                override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                                    if (consoleMessage != null) {
+                                        val level = consoleMessage.messageLevel()
+                                        val msg = consoleMessage.message()
+                                        val source = consoleMessage.sourceId()
+                                        val line = consoleMessage.lineNumber()
+                                        val formatted = "[JS Console $level] $msg ($source:$line)"
+                                        android.util.Log.d("PreviewWebView", formatted)
+                                        runner?.appendLog(formatted)
+                                    }
+                                    return super.onConsoleMessage(consoleMessage)
                                 }
                             }
 

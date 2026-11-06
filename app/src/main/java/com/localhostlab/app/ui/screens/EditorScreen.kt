@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
@@ -31,15 +32,18 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FindReplace
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Redo
 import androidx.compose.material.icons.filled.Save
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DrawerValue
@@ -56,7 +60,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -81,7 +84,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.OffsetMapping
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -89,42 +91,135 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import java.io.File
 
+/**
+ * Real-time syntax highlighting transformation supporting:
+ * tsx, ts, jsx, js, html, css, json, md
+ */
 class CodeSyntaxTransformation(private val fileExtension: String) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText {
         val raw = text.text
         val builder = AnnotatedString.Builder(raw)
+        val ext = fileExtension.lowercase()
 
-        val keywordColor = Color(0xFFF472B6)
-        val stringColor = Color(0xFF4ADE80)
-        val commentColor = Color(0xFF94A3B8)
-        val tagColor = Color(0xFF38BDF8)
-        val numberColor = Color(0xFFFB923C)
+        val keywordColor = Color(0xFFF472B6) // Pink
+        val stringColor = Color(0xFF4ADE80)  // Green
+        val commentColor = Color(0xFF94A3B8) // Slate Gray
+        val tagColor = Color(0xFF38BDF8)     // Sky Blue
+        val numberColor = Color(0xFFFB923C)  // Orange
+        val typeColor = Color(0xFFA78BFA)    // Violet
+        val propertyColor = Color(0xFFE2E8F0)// Light Slate
 
-        // Comments
-        Regex("//.*|/\\*[\\s\\S]*?\\*/").findAll(raw).forEach { match ->
-            builder.addStyle(SpanStyle(color = commentColor), match.range.first, match.range.last + 1)
-        }
+        when (ext) {
+            "ts", "tsx", "js", "jsx" -> {
+                // Comments (// and /* */)
+                Regex("//.*|/\\*[\\s\\S]*?\\*/").findAll(raw).forEach { m ->
+                    builder.addStyle(SpanStyle(color = commentColor), m.range.first, m.range.last + 1)
+                }
 
-        // Strings
-        Regex("\"[^\"]*\"|'[^']*'|`[^`]*`").findAll(raw).forEach { match ->
-            builder.addStyle(SpanStyle(color = stringColor), match.range.first, match.range.last + 1)
-        }
+                // Strings ("...", '...', `...`)
+                Regex("\"[^\"]*\"|'[^']*'|`[^`]*`").findAll(raw).forEach { m ->
+                    builder.addStyle(SpanStyle(color = stringColor), m.range.first, m.range.last + 1)
+                }
 
-        // Keywords
-        val keywords = "\\b(import|export|from|default|function|const|let|var|return|if|else|for|while|class|interface|type|extends|implements|new|this|async|await|true|false|null|undefined|try|catch|finally)\\b"
-        Regex(keywords).findAll(raw).forEach { match ->
-            builder.addStyle(SpanStyle(color = keywordColor, fontWeight = FontWeight.Bold), match.range.first, match.range.last + 1)
-        }
+                // JS/TS Keywords
+                val keywords = "\\b(import|export|from|default|function|const|let|var|return|if|else|for|while|switch|case|break|class|interface|type|extends|implements|new|this|async|await|true|false|null|undefined|try|catch|finally|typeof|instanceof)\\b"
+                Regex(keywords).findAll(raw).forEach { m ->
+                    builder.addStyle(SpanStyle(color = keywordColor, fontWeight = FontWeight.Bold), m.range.first, m.range.last + 1)
+                }
 
-        // Numbers
-        Regex("\\b\\d+(\\.\\d+)?\\b").findAll(raw).forEach { match ->
-            builder.addStyle(SpanStyle(color = numberColor), match.range.first, match.range.last + 1)
-        }
+                // Types & React identifiers
+                val types = "\\b(React|FC|ReactNode|useState|useEffect|useMemo|useCallback|useRef|string|number|boolean|any|void)\\b"
+                Regex(types).findAll(raw).forEach { m ->
+                    builder.addStyle(SpanStyle(color = typeColor), m.range.first, m.range.last + 1)
+                }
 
-        // Tags for JSX/TSX/HTML
-        if (fileExtension in listOf("tsx", "jsx", "html")) {
-            Regex("</?[a-zA-Z0-9_-]+>?").findAll(raw).forEach { match ->
-                builder.addStyle(SpanStyle(color = tagColor), match.range.first, match.range.last + 1)
+                // Numbers
+                Regex("\\b\\d+(\\.\\d+)?\\b").findAll(raw).forEach { m ->
+                    builder.addStyle(SpanStyle(color = numberColor), m.range.first, m.range.last + 1)
+                }
+
+                // JSX Tags
+                if (ext in listOf("tsx", "jsx")) {
+                    Regex("</?[a-zA-Z0-9_-]+>?").findAll(raw).forEach { m ->
+                        builder.addStyle(SpanStyle(color = tagColor), m.range.first, m.range.last + 1)
+                    }
+                }
+            }
+
+            "html", "htm" -> {
+                // HTML Comments
+                Regex("<!--[\\s\\S]*?-->").findAll(raw).forEach { m ->
+                    builder.addStyle(SpanStyle(color = commentColor), m.range.first, m.range.last + 1)
+                }
+
+                // HTML Tags
+                Regex("</?[a-zA-Z0-9_-]+").findAll(raw).forEach { m ->
+                    builder.addStyle(SpanStyle(color = tagColor, fontWeight = FontWeight.Bold), m.range.first, m.range.last + 1)
+                }
+
+                // Attribute strings
+                Regex("\"[^\"]*\"|'[^']*'").findAll(raw).forEach { m ->
+                    builder.addStyle(SpanStyle(color = stringColor), m.range.first, m.range.last + 1)
+                }
+            }
+
+            "css" -> {
+                // CSS Comments
+                Regex("/\\*[\\s\\S]*?\\*/").findAll(raw).forEach { m ->
+                    builder.addStyle(SpanStyle(color = commentColor), m.range.first, m.range.last + 1)
+                }
+
+                // CSS Selectors & Properties
+                Regex("[a-zA-Z-]+(?=\\s*:)").findAll(raw).forEach { m ->
+                    builder.addStyle(SpanStyle(color = tagColor), m.range.first, m.range.last + 1)
+                }
+
+                // Colors & Hex
+                Regex("#[0-9a-fA-F]{3,8}\\b").findAll(raw).forEach { m ->
+                    builder.addStyle(SpanStyle(color = keywordColor), m.range.first, m.range.last + 1)
+                }
+
+                // Numbers & units
+                Regex("\\b\\d+(\\.\\d+)?(px|rem|em|%|vh|vw|s|ms)?\\b").findAll(raw).forEach { m ->
+                    builder.addStyle(SpanStyle(color = numberColor), m.range.first, m.range.last + 1)
+                }
+            }
+
+            "json" -> {
+                // Keys
+                Regex("\"[^\"]+\"\\s*(?=:)").findAll(raw).forEach { m ->
+                    builder.addStyle(SpanStyle(color = tagColor), m.range.first, m.range.last + 1)
+                }
+
+                // String values
+                Regex(":\\s*(\"[^\"]*\")").findAll(raw).forEach { m ->
+                    val range = m.groups[1]?.range
+                    if (range != null) {
+                        builder.addStyle(SpanStyle(color = stringColor), range.first, range.last + 1)
+                    }
+                }
+
+                // Numbers & Booleans
+                Regex("\\b(true|false|null|\\d+(\\.\\d+)?)\\b").findAll(raw).forEach { m ->
+                    builder.addStyle(SpanStyle(color = numberColor), m.range.first, m.range.last + 1)
+                }
+            }
+
+            "md", "markdown" -> {
+                // Markdown Headers
+                Regex("(?m)^#{1,6}\\s+.*$").findAll(raw).forEach { m ->
+                    builder.addStyle(SpanStyle(color = keywordColor, fontWeight = FontWeight.Bold), m.range.first, m.range.last + 1)
+                }
+
+                // Markdown Links
+                Regex("\\[[^\\]]+\\]\\([^)]+\\)").findAll(raw).forEach { m ->
+                    builder.addStyle(SpanStyle(color = tagColor), m.range.first, m.range.last + 1)
+                }
+
+                // Inline code
+                Regex("`[^`]+`").findAll(raw).forEach { m ->
+                    builder.addStyle(SpanStyle(color = stringColor), m.range.first, m.range.last + 1)
+                }
             }
         }
 
@@ -143,12 +238,13 @@ fun EditorScreen(
     val openTabs by viewModel.openTabs.collectAsState()
     val activeIndex by viewModel.activeTabIndex.collectAsState()
     val statusMessage by viewModel.statusMessage.collectAsState()
+    val tabToClosePrompt by viewModel.tabToClosePrompt.collectAsState()
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    var showUnsavedDialog by remember { mutableStateOf(false) }
+    var showUnsavedExitDialog by remember { mutableStateOf(false) }
     var showNewFileDialog by remember { mutableStateOf(false) }
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var fileToDelete by remember { mutableStateOf<File?>(null) }
@@ -167,10 +263,10 @@ fun EditorScreen(
         }
     }
 
-    // Intercept back button if there are unsaved files
+    // Intercept back button if any tab has unsaved changes
     BackHandler {
         if (viewModel.hasUnsavedChanges()) {
-            showUnsavedDialog = true
+            showUnsavedExitDialog = true
         } else {
             onBackClick()
         }
@@ -182,7 +278,7 @@ fun EditorScreen(
             ModalDrawerSheet(
                 modifier = Modifier
                     .fillMaxHeight()
-                    .width(300.dp)
+                    .width(310.dp)
             ) {
                 Column(
                     modifier = Modifier
@@ -194,10 +290,17 @@ fun EditorScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "Project Files",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                        )
+                        Column {
+                            Text(
+                                text = "Project Files",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                text = viewModel.project?.name ?: "Files",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Row {
                             IconButton(onClick = { showNewFileDialog = true }) {
                                 Icon(imageVector = Icons.Default.Add, contentDescription = "New File")
@@ -211,11 +314,13 @@ fun EditorScreen(
                     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        items(fileTree, key = { it.file.canonicalPath }) { item ->
+                        items(fileTree, key = { it.absolutePath }) { item ->
                             FileTreeRow(
                                 item = item,
                                 onClick = {
-                                    if (!item.isDirectory) {
+                                    if (item.isDirectory) {
+                                        viewModel.toggleFolderExpanded(item.file)
+                                    } else {
                                         viewModel.openFile(item.file)
                                         coroutineScope.launch { drawerState.close() }
                                     }
@@ -236,19 +341,28 @@ fun EditorScreen(
             topBar = {
                 TopAppBar(
                     title = {
-                        Text(
-                            text = activeTab?.relativePath ?: viewModel.project?.name ?: "Editor",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.SemiBold,
-                                fontFamily = FontFamily.Monospace
-                            ),
-                            maxLines = 1
-                        )
+                        Column {
+                            Text(
+                                text = activeTab?.relativePath ?: viewModel.project?.name ?: "Editor",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontFamily = FontFamily.Monospace
+                                ),
+                                maxLines = 1
+                            )
+                            if (activeTab != null) {
+                                Text(
+                                    text = if (activeTab.isModified) "Unsaved changes" else "Saved (${File(activeTab.absolutePath).length()} bytes)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (activeTab.isModified) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     },
                     navigationIcon = {
                         IconButton(onClick = {
                             if (viewModel.hasUnsavedChanges()) {
-                                showUnsavedDialog = true
+                                showUnsavedExitDialog = true
                             } else {
                                 onBackClick()
                             }
@@ -359,7 +473,7 @@ fun EditorScreen(
                     }
                 }
 
-                // Multi-Tab Bar
+                // Multi-Tab Bar (Keyed by absolute file path, with unsaved dot indicator)
                 if (openTabs.isNotEmpty()) {
                     ScrollableTabRow(
                         selectedTabIndex = activeIndex.coerceIn(0, openTabs.size - 1),
@@ -372,20 +486,28 @@ fun EditorScreen(
                                 onClick = { viewModel.selectTab(index) },
                                 text = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (tab.isModified) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(7.dp)
+                                                    .background(Color(0xFF38BDF8), CircleShape)
+                                            )
+                                            Spacer(modifier = Modifier.width(5.dp))
+                                        }
                                         Text(
-                                            text = (if (tab.isModified) "● " else "") + tab.file.name,
+                                            text = tab.file.name,
                                             style = MaterialTheme.typography.bodySmall.copy(
                                                 fontWeight = if (index == activeIndex) FontWeight.Bold else FontWeight.Normal,
                                                 fontFamily = FontFamily.Monospace
                                             )
                                         )
-                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
                                         Icon(
                                             imageVector = Icons.Default.Close,
                                             contentDescription = "Close tab",
                                             modifier = Modifier
                                                 .size(16.dp)
-                                                .clickable { viewModel.closeTab(index) }
+                                                .clickable { viewModel.requestCloseTab(index) }
                                         )
                                     }
                                 }
@@ -475,27 +597,61 @@ fun EditorScreen(
                 }
             }
 
-            // Dialogs
-            if (showUnsavedDialog) {
+            // Unsaved Tab Close Prompt Dialog
+            tabToClosePrompt?.let { tabIndex ->
+                if (tabIndex in openTabs.indices) {
+                    val closingTab = openTabs[tabIndex]
+                    AlertDialog(
+                        onDismissRequest = { viewModel.dismissClosePrompt() },
+                        title = { Text("Unsaved Changes") },
+                        text = { Text("'${closingTab.file.name}' has unsaved changes. Do you want to save before closing?") },
+                        confirmButton = {
+                            Button(onClick = { viewModel.saveAndCloseTab(tabIndex) }) {
+                                Text("Save & Close")
+                            }
+                        },
+                        dismissButton = {
+                            Row {
+                                TextButton(onClick = { viewModel.forceCloseTab(tabIndex) }) {
+                                    Text("Discard")
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                TextButton(onClick = { viewModel.dismissClosePrompt() }) {
+                                    Text("Cancel")
+                                }
+                            }
+                        }
+                    )
+                }
+            }
+
+            // Unsaved Exit Dialog (when navigating back)
+            if (showUnsavedExitDialog) {
                 AlertDialog(
-                    onDismissRequest = { showUnsavedDialog = false },
+                    onDismissRequest = { showUnsavedExitDialog = false },
                     title = { Text("Unsaved Changes") },
-                    text = { Text("You have unsaved changes in your project. Do you want to discard them and exit?") },
+                    text = { Text("You have unsaved changes in your project. Do you want to save before exiting?") },
                     confirmButton = {
                         Button(onClick = {
-                            showUnsavedDialog = false
-                            onBackClick()
-                        }) {
-                            Text("Discard & Exit")
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = {
                             viewModel.saveActiveFile()
-                            showUnsavedDialog = false
+                            showUnsavedExitDialog = false
                             onBackClick()
                         }) {
                             Text("Save & Exit")
+                        }
+                    },
+                    dismissButton = {
+                        Row {
+                            TextButton(onClick = {
+                                showUnsavedExitDialog = false
+                                onBackClick()
+                            }) {
+                                Text("Discard & Exit")
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            TextButton(onClick = { showUnsavedExitDialog = false }) {
+                                Text("Cancel")
+                            }
                         }
                     }
                 )
@@ -567,10 +723,13 @@ fun EditorScreen(
                     title = { Text("Delete Confirmation") },
                     text = { Text("Are you sure you want to permanently delete '${file.name}'?") },
                     confirmButton = {
-                        Button(onClick = {
-                            viewModel.deleteFile(file)
-                            fileToDelete = null
-                        }) {
+                        Button(
+                            onClick = {
+                                viewModel.deleteFile(file)
+                                fileToDelete = null
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                        ) {
                             Text("Delete")
                         }
                     },
@@ -623,15 +782,33 @@ fun FileTreeRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(vertical = 4.dp, horizontal = (item.depth * 12).dp),
+            .padding(vertical = 4.dp, horizontal = 4.dp + (item.depth * 14).dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            imageVector = if (item.isDirectory) Icons.Default.Folder else Icons.Outlined.Description,
-            contentDescription = null,
-            tint = if (item.isDirectory) Color(0xFF38BDF8) else Color(0xFF94A3B8),
-            modifier = Modifier.size(18.dp)
-        )
+        if (item.isDirectory) {
+            Icon(
+                imageVector = if (item.isExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Icon(
+                imageVector = if (item.isExpanded) Icons.Default.FolderOpen else Icons.Default.Folder,
+                contentDescription = null,
+                tint = Color(0xFF38BDF8),
+                modifier = Modifier.size(18.dp)
+            )
+        } else {
+            Spacer(modifier = Modifier.width(20.dp))
+            Icon(
+                imageVector = Icons.Outlined.Description,
+                contentDescription = null,
+                tint = Color(0xFF94A3B8),
+                modifier = Modifier.size(18.dp)
+            )
+        }
+
         Spacer(modifier = Modifier.width(8.dp))
         Text(
             text = item.name,
