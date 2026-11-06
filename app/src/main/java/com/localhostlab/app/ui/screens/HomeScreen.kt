@@ -25,8 +25,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FolderZip
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -48,16 +48,16 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.localhostlab.app.data.Project
 import com.localhostlab.app.data.ProjectStatus
 import com.localhostlab.app.ui.theme.StatusError
@@ -76,14 +76,25 @@ fun HomeScreen(
 ) {
     val projects by viewModel.projects.collectAsState()
     val isExtracting by viewModel.isExtracting.collectAsState()
+    val importTitle by viewModel.importTitle.collectAsState()
     val extractionProgress by viewModel.extractionProgress.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
+
+    var showImportChoiceDialog by remember { mutableStateOf(false) }
 
     val zipPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
             viewModel.handleZipSelected(uri)
+        }
+    }
+
+    val folderPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.handleFolderSelected(uri)
         }
     }
 
@@ -109,9 +120,7 @@ fun HomeScreen(
         },
         floatingActionButton = {
             FloatingActionButton(
-                onClick = {
-                    zipPickerLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
-                },
+                onClick = { showImportChoiceDialog = true },
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary
             ) {
@@ -119,9 +128,9 @@ fun HomeScreen(
                     modifier = Modifier.padding(horizontal = 16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = "Upload ZIP")
+                    Icon(imageVector = Icons.Default.Add, contentDescription = "Import Project")
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(text = "Upload ZIP", fontWeight = FontWeight.SemiBold)
+                    Text(text = "Import Project", fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -133,8 +142,17 @@ fun HomeScreen(
         ) {
             if (projects.isEmpty()) {
                 EmptyProjectsState(
-                    onUploadClick = {
-                        zipPickerLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
+                    onUploadZipClick = {
+                        zipPickerLauncher.launch(
+                            arrayOf(
+                                "application/zip",
+                                "application/x-zip-compressed",
+                                "application/octet-stream"
+                            )
+                        )
+                    },
+                    onSelectFolderClick = {
+                        folderPickerLauncher.launch(null)
                     }
                 )
             } else {
@@ -155,12 +173,129 @@ fun HomeScreen(
                 }
             }
 
-            // Extraction Progress Dialog
+            // Choice Dialog: ZIP vs Folder
+            if (showImportChoiceDialog) {
+                AlertDialog(
+                    onDismissRequest = { showImportChoiceDialog = false },
+                    title = {
+                        Text(
+                            text = "Import Vite Project",
+                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                        )
+                    },
+                    text = {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = "Choose how you would like to import your Vite React project:",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            // Option 1: ZIP Archive
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        showImportChoiceDialog = false
+                                        zipPickerLauncher.launch(
+                                            arrayOf(
+                                                "application/zip",
+                                                "application/x-zip-compressed",
+                                                "application/octet-stream"
+                                            )
+                                        )
+                                    },
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.FolderZip,
+                                        contentDescription = "Upload ZIP",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    Column {
+                                        Text(
+                                            text = "Upload ZIP Archive",
+                                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                                        )
+                                        Text(
+                                            text = "Pick a compressed .zip project file",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Option 2: Project Folder
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        showImportChoiceDialog = false
+                                        folderPickerLauncher.launch(null)
+                                    },
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.FolderOpen,
+                                        contentDescription = "Select Folder",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    Column {
+                                        Text(
+                                            text = "Select Project Folder",
+                                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                                        )
+                                        Text(
+                                            text = "Pick an uncompressed folder from storage",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = {
+                        TextButton(onClick = { showImportChoiceDialog = false }) {
+                            Text(text = "Cancel")
+                        }
+                    }
+                )
+            }
+
+            // Extraction / Copy Progress Dialog
             if (isExtracting) {
                 AlertDialog(
                     onDismissRequest = {},
                     confirmButton = {},
-                    title = { Text(text = "Extracting Project...") },
+                    title = { Text(text = importTitle) },
                     text = {
                         Column {
                             val progress = extractionProgress
@@ -174,7 +309,7 @@ fun HomeScreen(
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = "Extracted ${progress.extractedCount} of ${progress.totalCount} files",
+                                    text = "Processed ${progress.extractedCount} of ${progress.totalCount} files",
                                     style = MaterialTheme.typography.bodySmall
                                 )
                                 Text(
@@ -188,7 +323,7 @@ fun HomeScreen(
                                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = "Reading ZIP entries...",
+                                    text = "Scanning project files...",
                                     style = MaterialTheme.typography.bodySmall
                                 )
                             }
@@ -343,7 +478,10 @@ fun StatusBadge(status: ProjectStatus) {
 }
 
 @Composable
-fun EmptyProjectsState(onUploadClick: () -> Unit) {
+fun EmptyProjectsState(
+    onUploadZipClick: () -> Unit,
+    onSelectFolderClick: () -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -369,7 +507,7 @@ fun EmptyProjectsState(onUploadClick: () -> Unit) {
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Pick a ZIP file of a Vite React project to run it on localhost and preview it directly in the app.",
+            text = "Pick a ZIP archive or select a project folder of a Vite React project to run it on localhost and preview it directly in the app.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -377,10 +515,24 @@ fun EmptyProjectsState(onUploadClick: () -> Unit) {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        FilledTonalButton(onClick = onUploadClick) {
-            Icon(imageVector = Icons.Default.Add, contentDescription = null)
+        Button(
+            onClick = onUploadZipClick,
+            modifier = Modifier.fillMaxWidth(0.85f)
+        ) {
+            Icon(imageVector = Icons.Default.FolderZip, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
-            Text(text = "Upload Vite Project ZIP")
+            Text(text = "Upload Project ZIP")
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        FilledTonalButton(
+            onClick = onSelectFolderClick,
+            modifier = Modifier.fillMaxWidth(0.85f)
+        ) {
+            Icon(imageVector = Icons.Default.FolderOpen, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(text = "Select Project Folder")
         }
     }
 }

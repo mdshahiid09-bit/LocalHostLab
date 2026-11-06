@@ -8,10 +8,11 @@
 
 1. **Animated Splash Screen:** Smooth spring animation welcoming the user before loading projects.
 2. **Project List & Storage:** Manage imported projects stored in app-private storage (`projects/<projectId>/`).
-3. **ZIP Import with Zip-Slip Protection:**
-   - Storage Access Framework file picker (`ActivityResultContracts.OpenDocument`).
-   - Canonical path validation defending against directory traversal (Zip-slip attacks).
-   - Real-time extraction file count and progress indicator.
+3. **Dual Import (ZIP Archive + Project Folder):**
+   - **ZIP Archive:** Pick `.zip` files via `ActivityResultContracts.OpenDocument` with canonical Zip-slip defense.
+   - **Project Folder:** Directly select uncompressed project folders via `ActivityResultContracts.OpenDocumentTree` (Storage Access Framework).
+   - High-throughput streaming with 64KB buffers and smart `.git` and `node_modules` filtering to prevent SAF IPC bottlenecks and ANRs.
+   - Real-time progress indicator displaying processed file count and current file name.
 4. **Vite Project Verification:**
    - Inspects `package.json` for validity.
    - Ensures `vite` is present in `dependencies` or `devDependencies`.
@@ -69,6 +70,7 @@ LocalHostLab/
 │           │   └── ProjectRepository.kt
 │           ├── upload/
 │           │   ├── ZipImporter.kt
+│           │   ├── FolderImporter.kt
 │           │   └── ProjectChecker.kt
 │           └── run/
 │               ├── StaticServer.kt
