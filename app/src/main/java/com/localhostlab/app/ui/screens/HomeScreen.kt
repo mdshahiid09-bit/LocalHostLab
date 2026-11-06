@@ -91,7 +91,7 @@ fun HomeScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertizontally) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = "LocalHostLab",
                             style = MaterialTheme.typography.titleLarge.copy(
@@ -117,7 +117,7 @@ fun HomeScreen(
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertizontally
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(imageVector = Icons.Default.Add, contentDescription = "Upload ZIP")
                     Spacer(modifier = Modifier.width(8.dp))
@@ -150,10 +150,12 @@ fun HomeScreen(
                             onDelete = { viewModel.deleteProject(project.id) }
                         )
                     }
+                    // Spacer for FAB clearance
                     item { Spacer(modifier = Modifier.height(72.dp)) }
                 }
             }
 
+            // Extraction Progress Dialog
             if (isExtracting) {
                 AlertDialog(
                     onDismissRequest = {},
@@ -169,6 +171,7 @@ fun HomeScreen(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(8.dp)
+                                raid = false
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
@@ -195,6 +198,7 @@ fun HomeScreen(
                 )
             }
 
+            // Error Dialog
             if (errorMessage != null) {
                 AlertDialog(
                     onDismissRequest = { viewModel.dismissError() },
@@ -220,6 +224,7 @@ fun ProjectCard(
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
 
+    // Spring bounce animation on click
     val cardScale by animateFloatAsState(
         targetValue = if (isPressed) 0.96f else 1f,
         animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
@@ -245,10 +250,10 @@ fun ProjectCard(
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertizontally
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
-                    verticalAlignment = Alignment.CenterVertizontally,
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
                 ) {
                     Icon(
@@ -284,7 +289,7 @@ fun ProjectCard(
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertizontally
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 val lastRunText = if (project.lastRun > 0L) {
                     val sdf = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())

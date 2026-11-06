@@ -137,7 +137,7 @@ fun ProjectScreen(
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertizontally
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
                             text = "Status: ${project?.status?.getDisplayName() ?: "Unknown"}",
@@ -254,7 +254,7 @@ fun ProjectScreen(
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertizontally
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     text = "Build & Server Logs",

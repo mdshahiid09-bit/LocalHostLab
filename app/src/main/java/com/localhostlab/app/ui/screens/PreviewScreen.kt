@@ -82,7 +82,7 @@ fun PreviewScreen(
                         modifier = Modifier.fillMaxWidth(0.92f)
                     ) {
                         Row(
-                            verticalAlignment = Alignment.CenterVertizontally,
+                            verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                         ) {
                             Text(
