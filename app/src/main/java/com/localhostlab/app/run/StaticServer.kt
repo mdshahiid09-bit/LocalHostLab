@@ -81,7 +81,7 @@ class StaticServer(
                 val parts = requestLine.split(" ")
                 if (parts.size < 2) return
 
-                val method = parts[0]
+                val method = parts[0].uppercase()
                 var rawUri = parts[1]
 
                 // Drain remaining request headers
@@ -90,8 +90,11 @@ class StaticServer(
                     line = reader.readLine()
                 }
 
-                if (method != "GET" && method != "HEAD") {
-                    sendResponse(out, 405, "Method Not Allowed", "text/plain", "Method Not Allowed".toByteArray())
+                val isHead = method == "HEAD"
+                val isGet = method == "GET"
+
+                if (!isGet && !isHead) {
+                    sendResponse(out, 405, "Method Not Allowed", "text/plain; charset=utf-8", "Method Not Allowed".toByteArray(), isHead = false)
                     return
                 }
 
@@ -110,29 +113,40 @@ class StaticServer(
                 val targetPath = if (decodedPath == "/" || decodedPath.isEmpty()) "/index.html" else decodedPath
                 var fileToServe = File(staticDir, targetPath.removePrefix("/"))
 
-                // SPA Fallback: If file does not exist and doesn't contain a file extension, serve index.html
+                // Path traversal check
+                val canonicalStaticDir = staticDir.canonicalPath
+                if (fileToServe.exists() && !fileToServe.canonicalPath.startsWith(canonicalStaticDir)) {
+                    sendResponse(out, 403, "Forbidden", "text/plain; charset=utf-8", "Access Denied".toByteArray(), isHead)
+                    return
+                }
+
+                // SPA Fallback:
+                // If the exact file doesn't exist, check whether it's an unknown client-side route
+                // or if it's an asset. If not an existing file, fallback to dist/index.html.
                 if (!fileToServe.exists() || fileToServe.isDirectory) {
-                    val hasExtension = targetPath.substringAfterLast('/').contains('.')
-                    if (!hasExtension || !fileToServe.exists()) {
+                    val isAssetRequest = targetPath.startsWith("/assets/") ||
+                            (targetPath.substringAfterLast('/').contains('.') && !targetPath.endsWith(".html"))
+
+                    if (!isAssetRequest) {
                         val indexFile = File(staticDir, "index.html")
-                        if (indexFile.exists()) {
+                        if (indexFile.exists() && indexFile.isFile) {
                             fileToServe = indexFile
                         }
                     }
                 }
 
                 if (!fileToServe.exists() || !fileToServe.isFile) {
-                    val notFoundMsg = "<html><body><h1>404 Not Found</h1><p>LocalHostLab: File not found in dist/</p></body></html>"
-                    sendResponse(out, 404, "Not Found", "text/html; charset=utf-8", notFoundMsg.toByteArray())
+                    val notFoundMsg = "<!doctype html><html><head><title>404 Not Found</title></head><body><h1>404 Not Found</h1><p>LocalHostLab: File not found in dist/: ${fileToServe.name}</p></body></html>"
+                    sendResponse(out, 404, "Not Found", "text/html; charset=utf-8", notFoundMsg.toByteArray(), isHead)
                     return
                 }
 
                 val mimeType = getMimeType(fileToServe.extension)
                 val fileBytes = FileInputStream(fileToServe).use { it.readBytes() }
-                sendResponse(out, 200, "OK", mimeType, fileBytes)
+                sendResponse(out, 200, "OK", mimeType, fileBytes, isHead)
             }
         } catch (e: Exception) {
-            // Client disconnected or connection aborted
+            // Client connection closed or aborted
         }
     }
 
@@ -141,7 +155,8 @@ class StaticServer(
         statusCode: Int,
         statusText: String,
         contentType: String,
-        body: ByteArray
+        body: ByteArray,
+        isHead: Boolean
     ) {
         val header = "HTTP/1.1 $statusCode $statusText\r\n" +
                 "Content-Type: $contentType\r\n" +
@@ -150,27 +165,38 @@ class StaticServer(
                 "Access-Control-Allow-Origin: *\r\n\r\n"
 
         out.write(header.toByteArray(Charsets.UTF_8))
-        out.write(body)
+        if (!isHead) {
+            out.write(body)
+        }
         out.flush()
     }
 
     private fun getMimeType(extension: String): String {
         return when (extension.lowercase()) {
             "html", "htm" -> "text/html; charset=utf-8"
-            "js", "mjs" -> "application/javascript; charset=utf-8"
             "css" -> "text/css; charset=utf-8"
-            "json" -> "application/json; charset=utf-8"
+            "js", "mjs", "cjs" -> "application/javascript; charset=utf-8"
+            "json", "map" -> "application/json; charset=utf-8"
             "svg" -> "image/svg+xml"
             "png" -> "image/png"
             "jpg", "jpeg" -> "image/jpeg"
             "gif" -> "image/gif"
             "webp" -> "image/webp"
             "ico" -> "image/x-icon"
+            "avif" -> "image/avif"
+            "bmp" -> "image/bmp"
             "woff" -> "font/woff"
             "woff2" -> "font/woff2"
             "ttf" -> "font/ttf"
+            "otf" -> "font/otf"
+            "eot" -> "application/vnd.ms-fontobject"
+            "wasm" -> "application/wasm"
             "txt" -> "text/plain; charset=utf-8"
-            "map" -> "application/json"
+            "xml" -> "application/xml; charset=utf-8"
+            "mp4" -> "video/mp4"
+            "webm" -> "video/webm"
+            "mp3" -> "audio/mpeg"
+            "wav" -> "audio/wav"
             else -> "application/octet-stream"
         }
     }

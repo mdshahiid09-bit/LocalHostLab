@@ -17,6 +17,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 
 data class RunnerFailure(
     val stepName: String,
@@ -100,9 +102,9 @@ class ProjectRunner(
             appendLog("[LocalHostLab] =======================================")
 
             currentJob = scope.launch(Dispatchers.IO) {
-                // Step 1: npm install
+                // Step 1: npm install (always run for real)
                 _currentStepName.value = "Step 1/3: npm install"
-                _stepProgress.value = 0.33f
+                _stepProgress.value = 0.25f
                 repository.updateProjectStatus(project.id, ProjectStatus.INSTALLING)
 
                 val installResult = nodeEngine.executeStep(
@@ -113,13 +115,14 @@ class ProjectRunner(
                 )
 
                 if (installResult.isFailure) {
-                    handleFailure("Step 1/3: npm install", project)
+                    val err = installResult.exceptionOrNull()?.message ?: "npm install failed"
+                    handleFailure("Step 1/3: npm install", project, customSuggestion = err)
                     return@launch
                 }
 
-                // Step 2: npm run build
+                // Step 2: npm run build (always run for real in project directory)
                 _currentStepName.value = "Step 2/3: npm run build"
-                _stepProgress.value = 0.66f
+                _stepProgress.value = 0.55f
                 repository.updateProjectStatus(project.id, ProjectStatus.BUILDING)
 
                 val buildResult = nodeEngine.executeStep(
@@ -130,35 +133,104 @@ class ProjectRunner(
                 )
 
                 if (buildResult.isFailure) {
-                    handleFailure("Step 2/3: npm run build", project)
+                    val err = buildResult.exceptionOrNull()?.message ?: "npm run build failed"
+                    handleFailure("Step 2/3: npm run build", project, customSuggestion = err)
                     return@launch
+                }
+
+                // Verify dist/ and dist/index.html actually exists and is non-empty
+                val distDir = File(workingDir, "dist")
+                val indexHtml = File(distDir, "index.html")
+                if (!distDir.exists() || !indexHtml.exists() || indexHtml.length() == 0L) {
+                    val size = if (indexHtml.exists()) indexHtml.length() else 0L
+                    val err = "Build exited with code 0, but dist/index.html does not exist or is empty ($size bytes)."
+                    appendLog("[LocalHostLab] ERROR: $err")
+                    handleFailure("Step 2/3: npm run build", project, customSuggestion = "Ensure Vite build outputs a valid non-empty index.html in the dist/ folder.")
+                    return@launch
+                }
+
+                appendLog("[LocalHostLab] Build validation successful: dist/index.html verified (${indexHtml.length()} bytes).")
+
+                // Log all files in dist/ folder
+                val distFiles = distDir.walkTopDown().filter { it.isFile }.toList()
+                appendLog("[LocalHostLab] Serving files from dist/ (${distFiles.size} files):")
+                distFiles.forEach { f ->
+                    val relPath = f.relativeTo(distDir).path
+                    appendLog("[LocalHostLab]   - $relPath (${f.length()} bytes)")
                 }
 
                 // Step 3: Start static HTTP server on 127.0.0.1 (starting at port 3000)
                 _currentStepName.value = "Step 3/3: Starting HTTP server..."
-                _stepProgress.value = 0.90f
+                _stepProgress.value = 0.80f
                 appendLog("[LocalHostLab] Starting static server serving dist/ folder...")
-
-                val distDir = File(workingDir, "dist")
-                if (!distDir.exists()) {
-                    distDir.mkdirs()
-                }
 
                 val server = StaticServer(distDir)
                 currentServer = server
                 val serverResult = server.start(startPort = 3000)
 
                 if (serverResult.isFailure) {
-                    appendLog("[LocalHostLab] Failed to start HTTP server: ${serverResult.exceptionOrNull()?.message}")
-                    handleFailure("Step 3/3: Start HTTP Server", project)
+                    val err = serverResult.exceptionOrNull()?.message ?: "Failed to start HTTP server"
+                    appendLog("[LocalHostLab] ERROR: $err")
+                    handleFailure("Step 3/3: Start HTTP Server", project, customSuggestion = err)
                     return@launch
                 }
 
                 val port = serverResult.getOrThrow()
                 _activePort.value = port
+
+                // Step 4: Health Check - App sends HTTP GET to http://127.0.0.1:<port>/
+                _currentStepName.value = "Step 3/3: Verifying server health..."
+                _stepProgress.value = 0.92f
+                appendLog("[LocalHostLab] Verifying server health: GET http://127.0.0.1:$port/ ...")
+
+                var healthOk = false
+                var healthStatus = -1
+                var healthErrorDetail: String? = null
+                var first300Chars: String? = null
+
+                try {
+                    val url = URL("http://127.0.0.1:$port/")
+                    val conn = (url.openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 4000
+                        readTimeout = 4000
+                        requestMethod = "GET"
+                        instanceFollowRedirects = true
+                    }
+                    healthStatus = conn.responseCode
+                    val contentType = conn.contentType ?: ""
+                    val body = conn.inputStream.bufferedReader().use { it.readText() }
+
+                    val isHtml = contentType.contains("text/html", ignoreCase = true) ||
+                            body.contains("<html", ignoreCase = true) ||
+                            body.contains("<!doctype html", ignoreCase = true)
+
+                    if (healthStatus == 200 && isHtml && body.isNotBlank()) {
+                        healthOk = true
+                        first300Chars = body.take(300)
+                        appendLog("[LocalHostLab] HTTP 200 OK received from http://127.0.0.1:$port/ (Content-Type: $contentType)")
+                        appendLog("[LocalHostLab] First 300 characters of returned HTML:")
+                        appendLog("--------------------------------------------------")
+                        appendLog(first300Chars)
+                        appendLog("--------------------------------------------------")
+                    } else {
+                        healthErrorDetail = "HTTP Status: $healthStatus, Content-Type: '$contentType', isHtml: $isHtml"
+                    }
+                } catch (e: Exception) {
+                    healthErrorDetail = "Connection failed: ${e.message}"
+                }
+
+                if (!healthOk) {
+                    val errMsg = "Server health check failed: $healthErrorDetail"
+                    appendLog("[LocalHostLab] ERROR: $errMsg")
+                    stopInternal()
+                    handleFailure("Step 3/3: Server Health Check (GET http://127.0.0.1:$port/)", project, customSuggestion = errMsg)
+                    return@launch
+                }
+
+                // ONLY mark project RUNNING after 200 OK verified
                 _stepProgress.value = 1.0f
                 _currentStepName.value = "Server active on port $port"
-                appendLog("[LocalHostLab] SUCCESS: HTTP server running at http://127.0.0.1:$port/")
+                appendLog("[LocalHostLab] SUCCESS: HTTP server running and verified at http://127.0.0.1:$port/")
 
                 repository.updateProjectStatus(
                     id = project.id,
@@ -179,11 +251,15 @@ class ProjectRunner(
         }
     }
 
-    private suspend fun handleFailure(stepName: String, project: Project) {
+    private suspend fun handleFailure(
+        stepName: String,
+        project: Project,
+        customSuggestion: String? = null
+    ) {
         val currentLogs = _logs.value
         val last20 = if (currentLogs.size > 20) currentLogs.takeLast(20) else currentLogs
 
-        val suggestion = generateFixSuggestion(stepName, last20)
+        val suggestion = customSuggestion ?: generateFixSuggestion(stepName, last20)
 
         repository.updateProjectStatus(project.id, ProjectStatus.ERROR)
         _currentStepName.value = null
@@ -234,6 +310,9 @@ class ProjectRunner(
     private suspend fun stopInternal() {
         currentJob?.cancel()
         currentJob = null
+
+        // Stop active running process if any
+        nodeEngine.stopActiveProcess()
 
         currentServer?.stop()
         currentServer = null

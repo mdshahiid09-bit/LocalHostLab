@@ -34,9 +34,25 @@ jobs:
           chmod +x gradlew
           ls -lh gradle/wrapper/
 
+      - name: Setup nodejs-mobile libnode.so
+        run: |
+          mkdir -p /tmp/node-mobile
+          curl -sSL "https://github.com/JaneaSystems/nodejs-mobile/releases/download/v0.3.3/nodejs-mobile-v0.3.3-android.zip" -o /tmp/node-mobile/nodejs-mobile.zip
+          unzip -q /tmp/node-mobile/nodejs-mobile.zip -d /tmp/node-mobile/extracted
+          mkdir -p app/src/main/jniLibs
+          cp -r /tmp/node-mobile/extracted/bin/* app/src/main/jniLibs/
+          echo "Bundled jniLibs contents:"
+          ls -lR app/src/main/jniLibs/
+
       - name: Build Debug APK
         run: |
-          gradle assembleDebug --stacktrace --info > build.log 2>&1 || (cat build.log && exit 1)
+          ./gradlew assembleDebug --stacktrace --info > build.log 2>&1 || (cat build.log && exit 1)
+
+      - name: Verify libnode.so in APK
+        run: |
+          echo "Verifying libnode.so presence inside app-debug.apk..."
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep libnode.so
+          echo "libnode.so is successfully verified in the APK!"
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
