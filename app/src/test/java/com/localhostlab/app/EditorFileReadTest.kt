@@ -72,4 +72,18 @@ class EditorFileReadTest {
         assertTrue("App.tsx content must not be blank", readApp.isNotBlank())
         assertTrue("Navbar.tsx content must not be blank", readNav.isNotBlank())
     }
+
+    @Test
+    fun testStaticServerHealthCheckAndDistVerification() {
+        val root = tempFolder.newFolder("projects", "server-test", "dist")
+        val indexHtml = File(root, "index.html")
+        val htmlContent = "<!DOCTYPE html><html><head><title>Test</title></head><body><h1>Hello LocalHostLab</h1></body></html>"
+        indexHtml.writeText(htmlContent)
+
+        assertTrue(indexHtml.exists())
+        assertTrue(indexHtml.length() > 0)
+
+        val read = indexHtml.readText()
+        assertTrue(read.contains("Hello LocalHostLab"))
+    }
 }

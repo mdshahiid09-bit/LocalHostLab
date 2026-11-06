@@ -44,6 +44,27 @@ class NodeEngine(private val context: Context) {
     fun isRuntimeAvailable(): Boolean = isNativeNodeLoaded
 
     /**
+     * Checks whether a command (such as 'npm' or 'node') is directly executable on the host.
+     */
+    fun isCommandAvailable(cmd: String): Boolean {
+        val candidates = findBinaries(cmd)
+        for (bin in candidates) {
+            try {
+                val f = File(bin)
+                if (f.exists() && f.canExecute()) {
+                    return true
+                }
+                val proc = ProcessBuilder(listOf(bin, "--version")).redirectErrorStream(true).start()
+                val exit = proc.waitFor()
+                if (exit == 0) return true
+            } catch (e: Exception) {
+                // Not executable in this sandbox
+            }
+        }
+        return false
+    }
+
+    /**
      * Stop and kill any active running Node/npm process immediately.
      */
     fun stopActiveProcess() {

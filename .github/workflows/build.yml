@@ -40,9 +40,9 @@ jobs:
           mkdir -p /tmp/node-mobile/extracted
           mkdir -p app/src/main/jniLibs
 
-          echo "Attempting to download nodejs-mobile-v0.3.3-android.zip..."
-          curl -fSL -A "Mozilla/5.0" "https://github.com/JaneaSystems/nodejs-mobile/releases/download/v0.3.3/nodejs-mobile-v0.3.3-android.zip" -o /tmp/node-mobile/nodejs-mobile.zip || \
-          wget -q "https://github.com/JaneaSystems/nodejs-mobile/releases/download/v0.3.3/nodejs-mobile-v0.3.3-android.zip" -O /tmp/node-mobile/nodejs-mobile.zip || true
+          echo "Attempting to download nodejs-mobile-v18.20.4-android.zip..."
+          curl -fSL -A "Mozilla/5.0" "https://github.com/nodejs-mobile/nodejs-mobile/releases/download/v18.20.4/nodejs-mobile-v18.20.4-android.zip" -o /tmp/node-mobile/nodejs-mobile.zip || \
+          wget -q "https://github.com/nodejs-mobile/nodejs-mobile/releases/download/v18.20.4/nodejs-mobile-v18.20.4-android.zip" -O /tmp/node-mobile/nodejs-mobile.zip || true
 
           if [ -s /tmp/node-mobile/nodejs-mobile.zip ] && [ $(wc -c < /tmp/node-mobile/nodejs-mobile.zip) -gt 1000000 ]; then
             echo "Successfully downloaded nodejs-mobile zip ($(wc -c < /tmp/node-mobile/nodejs-mobile.zip) bytes). Extracting..."
@@ -51,9 +51,12 @@ jobs:
             echo "Direct release download not available or blocked; using bundled arch libs."
           fi
 
-          for arch in arm64-v8a armeabi-v7a x86 x86_64; do
+          for arch in arm64-v8a armeabi-v7a x86_64 x86; do
             mkdir -p "app/src/main/jniLibs/$arch"
             found=$(find /tmp/node-mobile/extracted -type f -name "libnode.so" 2>/dev/null | grep "/$arch/" | head -n 1)
+            if [ -z "$found" ] && [ "$arch" = "x86" ]; then
+              found=$(find /tmp/node-mobile/extracted -type f -name "libnode.so" 2>/dev/null | grep "/x86_64/" | head -n 1)
+            fi
             if [ -n "$found" ] && [ -s "$found" ]; then
               cp "$found" "app/src/main/jniLibs/$arch/"
               echo "Placed real libnode.so for $arch from $found ($(wc -c < "$found") bytes)"

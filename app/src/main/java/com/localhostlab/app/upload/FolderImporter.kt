@@ -31,7 +31,7 @@ object FolderImporter {
      *
      * Rules:
      * - Copies only the selected folder's contents and never its parent folder.
-     * - Skips node_modules, dist, .git, and any hidden folders/files starting with '.'.
+     * - Skips node_modules, .git, and any hidden folders/files starting with '.'.
      * - Protects against path traversal.
      * - Live counter progress reporting ("Copying X of Y files").
      * - Re-sync support: overwrites existing files while preserving projectId.
@@ -74,10 +74,9 @@ object FolderImporter {
                 val children = dir.listFiles()
                 for (child in children) {
                     val name = child.name ?: continue
-                    // Skip hidden files/folders (starting with '.') as well as node_modules and dist
+                    // Skip hidden files/folders (starting with '.') as well as node_modules
                     if (name.startsWith(".")) continue
                     if (name.equals("node_modules", ignoreCase = true)) continue
-                    if (name.equals("dist", ignoreCase = true)) continue
 
                     if (child.isDirectory) {
                         val subPath = if (relativePath.isEmpty()) name else "$relativePath/$name"
