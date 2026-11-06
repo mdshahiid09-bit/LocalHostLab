@@ -388,10 +388,22 @@ class ProjectRunner(
         }
     }
 
-    fun copyLogsToClipboard() {
-        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    fun copyLogsToClipboard(ctx: Context = context) {
+        val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val allLogs = _logs.value.joinToString("\n")
         val clip = ClipData.newPlainText("LocalHostLab Build & Server Console", allLogs)
+        clipboard.setPrimaryClip(clip)
+    }
+
+    fun copyFailureLogsToClipboard(ctx: Context = context) {
+        val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val failure = _lastFailure.value
+        val failureText = if (failure != null) {
+            "Failure at ${failure.stepName}:\nSuggestion: ${failure.fixSuggestion}\n\nLast Logs:\n" + failure.last20Logs.joinToString("\n")
+        } else {
+            _logs.value.takeLast(20).joinToString("\n")
+        }
+        val clip = ClipData.newPlainText("LocalHostLab Failure Log", failureText)
         clipboard.setPrimaryClip(clip)
     }
 }
