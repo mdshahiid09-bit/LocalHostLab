@@ -19,29 +19,35 @@ object FolderImporter {
         val currentFileName: String
     )
 
+    data class ImportResult(
+        val projectId: String,
+        val targetDir: File,
+        val fileCount: Int
+    )
+
     /**
      * Recursively copies a project directory selected via Storage Access Framework
      * (ACTION_OPEN_DOCUMENT_TREE) into private app storage: `projects/<projectId>/`.
      *
-     * Features:
-     * - Skips `.git` and `node_modules` folders to avoid heavy SAF IPC latency and ANRs.
-     * - Validates canonical paths to prevent path traversal attacks.
-     * - Employs a 64KB stream buffer for optimal I/O throughput.
-     * - Reports live progress (file count and file name) during copy.
+     * Rules:
+     * - Copies only the selected folder's contents and never its parent folder.
+     * - Skips node_modules, dist, .git, and any hidden folders/files starting with '.'.
+     * - Protects against path traversal.
+     * - Live counter progress reporting ("Copying X of Y files").
+     * - Re-sync support: overwrites existing files while preserving projectId.
      */
     suspend fun importFolder(
         context: Context,
         treeUri: Uri,
         projectId: String = UUID.randomUUID().toString(),
         onProgress: (ImportProgress) -> Unit = {}
-    ): Result<Pair<String, File>> = withContext(Dispatchers.IO) {
+    ): Result<ImportResult> = withContext(Dispatchers.IO) {
         try {
-            // Attempt to persist read permission if supported by the provider
             try {
                 val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION
                 context.contentResolver.takePersistableUriPermission(treeUri, takeFlags)
             } catch (e: Exception) {
-                // Ignore if not supported by the provider
+                // Safe ignore if not supported by provider
             }
 
             val rootDocument = DocumentFile.fromTreeUri(context, treeUri)
@@ -62,16 +68,18 @@ object FolderImporter {
             }
             val canonicalTargetDirPath = targetDir.canonicalPath
 
-            // Fast index traversal to collect files to copy, skipping .git and node_modules
             val itemsToCopy = ArrayList<Pair<DocumentFile, String>>()
 
             fun scanDirectory(dir: DocumentFile, relativePath: String) {
                 val children = dir.listFiles()
                 for (child in children) {
                     val name = child.name ?: continue
-                    if (name == ".git") continue
+                    // Skip hidden files/folders (starting with '.') as well as node_modules and dist
+                    if (name.startsWith(".")) continue
+                    if (name.equals("node_modules", ignoreCase = true)) continue
+                    if (name.equals("dist", ignoreCase = true)) continue
+
                     if (child.isDirectory) {
-                        if (name == "node_modules") continue
                         val subPath = if (relativePath.isEmpty()) name else "$relativePath/$name"
                         scanDirectory(child, subPath)
                     } else {
@@ -84,17 +92,16 @@ object FolderImporter {
             scanDirectory(rootDocument, "")
 
             if (itemsToCopy.isEmpty()) {
-                return@withContext Result.failure(Exception("The selected folder is empty or contains no readable files."))
+                return@withContext Result.failure(Exception("The selected folder contains no readable project files."))
             }
 
             val totalCount = itemsToCopy.size
-            val buffer = ByteArray(65536) // 64 KB buffer
+            val buffer = ByteArray(65536) // 64 KB streaming buffer
 
             itemsToCopy.forEachIndexed { index, (docFile, relPath) ->
                 val destinationFile = File(targetDir, relPath)
                 val canonicalDestinationPath = destinationFile.canonicalPath
 
-                // Directory traversal defense
                 if (!canonicalDestinationPath.startsWith(canonicalTargetDirPath + File.separator) &&
                     canonicalDestinationPath != canonicalTargetDirPath
                 ) {
@@ -124,7 +131,13 @@ object FolderImporter {
                 )
             }
 
-            Result.success(Pair(projectId, targetDir))
+            Result.success(
+                ImportResult(
+                    projectId = projectId,
+                    targetDir = targetDir,
+                    fileCount = totalCount
+                )
+            )
         } catch (e: Exception) {
             e.printStackTrace()
             Result.failure(e)

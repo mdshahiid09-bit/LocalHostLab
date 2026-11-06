@@ -13,11 +13,15 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.localhostlab.app.data.ProjectRepository
 import com.localhostlab.app.run.ProjectRunner
+import com.localhostlab.app.ui.screens.EditorScreen
+import com.localhostlab.app.ui.screens.EditorViewModel
 import com.localhostlab.app.ui.screens.HomeScreen
 import com.localhostlab.app.ui.screens.HomeViewModel
 import com.localhostlab.app.ui.screens.PreviewScreen
 import com.localhostlab.app.ui.screens.ProjectScreen
 import com.localhostlab.app.ui.screens.ProjectViewModel
+import com.localhostlab.app.ui.screens.SettingsScreen
+import com.localhostlab.app.ui.screens.SettingsViewModel
 import com.localhostlab.app.ui.screens.SplashScreen
 
 @Composable
@@ -27,9 +31,18 @@ fun LocalHostLabNavGraph(
     runner: ProjectRunner
 ) {
     val context = LocalContext.current
+    val application = context.applicationContext as android.app.Application
+
     val homeViewModel = remember {
         HomeViewModel(
-            application = context.applicationContext as android.app.Application,
+            application = application,
+            repository = repository
+        )
+    }
+
+    val settingsViewModel = remember {
+        SettingsViewModel(
+            application = application,
             repository = repository
         )
     }
@@ -65,7 +78,26 @@ fun LocalHostLabNavGraph(
                 viewModel = homeViewModel,
                 onProjectClick = { projectId ->
                     navController.navigate(Screen.Project.createRoute(projectId))
+                },
+                onOpenSettings = {
+                    navController.navigate(Screen.Settings.route)
+                },
+                onOpenEditor = { projectId ->
+                    navController.navigate(Screen.Editor.createRoute(projectId))
                 }
+            )
+        }
+
+        composable(
+            route = Screen.Settings.route,
+            enterTransition = { fadeIn(animationSpec = tween(300)) },
+            exitTransition = { fadeOut(animationSpec = tween(300)) },
+            popEnterTransition = { fadeIn(animationSpec = tween(300)) },
+            popExitTransition = { fadeOut(animationSpec = tween(300)) }
+        ) {
+            SettingsScreen(
+                viewModel = settingsViewModel,
+                onBackClick = { navController.popBackStack() }
             )
         }
 
@@ -91,6 +123,9 @@ fun LocalHostLabNavGraph(
                 onBackClick = { navController.popBackStack() },
                 onOpenPreview = { id ->
                     navController.navigate(Screen.Preview.createRoute(id))
+                },
+                onOpenEditor = { id ->
+                    navController.navigate(Screen.Editor.createRoute(id))
                 }
             )
         }
@@ -110,6 +145,32 @@ fun LocalHostLabNavGraph(
             PreviewScreen(
                 port = port,
                 onBackClick = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            route = Screen.Editor.route,
+            arguments = listOf(navArgument("projectId") { type = NavType.StringType }),
+            enterTransition = { fadeIn(animationSpec = tween(300)) },
+            exitTransition = { fadeOut(animationSpec = tween(300)) },
+            popEnterTransition = { fadeIn(animationSpec = tween(300)) },
+            popExitTransition = { fadeOut(animationSpec = tween(300)) }
+        ) { backStackEntry ->
+            val projectId = backStackEntry.arguments?.getString("projectId") ?: ""
+            val editorViewModel = remember(projectId) {
+                EditorViewModel(
+                    application = application,
+                    projectId = projectId,
+                    repository = repository
+                )
+            }
+
+            EditorScreen(
+                viewModel = editorViewModel,
+                onBackClick = { navController.popBackStack() },
+                onOpenPreview = { id ->
+                    navController.navigate(Screen.Preview.createRoute(id))
+                }
             )
         }
     }

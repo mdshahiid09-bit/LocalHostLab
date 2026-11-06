@@ -47,6 +47,13 @@ class ProjectRepository(
                         id = obj.getString("id"),
                         name = obj.getString("name"),
                         path = obj.getString("path"),
+                        sourceType = try {
+                            ProjectSourceType.valueOf(obj.optString("sourceType", ProjectSourceType.FOLDER.name))
+                        } catch (e: Exception) {
+                            ProjectSourceType.FOLDER
+                        },
+                        sourceUri = obj.optString("sourceUri", "").takeIf { it.isNotEmpty() },
+                        fileCount = obj.optInt("fileCount", 0),
                         lastRun = obj.optLong("lastRun", 0L),
                         status = try {
                             ProjectStatus.valueOf(obj.optString("status", ProjectStatus.IDLE.name))
@@ -73,6 +80,9 @@ class ProjectRepository(
                     put("id", p.id)
                     put("name", p.name)
                     put("path", p.path)
+                    put("sourceType", p.sourceType.name)
+                    p.sourceUri?.let { put("sourceUri", it) }
+                    put("fileCount", p.fileCount)
                     put("lastRun", p.lastRun)
                     put("status", p.status.name)
                     put("port", p.port)
@@ -122,8 +132,36 @@ class ProjectRepository(
         }
     }
 
+    suspend fun renameProject(id: String, newName: String) = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val currentList = _projects.value.toMutableList()
+            val index = currentList.indexOfFirst { it.id == id }
+            if (index >= 0) {
+                currentList[index] = currentList[index].copy(name = newName)
+                _projects.value = currentList
+                persistProjects(currentList)
+            }
+        }
+    }
+
+    suspend fun updateProjectFileCount(id: String, count: Int) = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val currentList = _projects.value.toMutableList()
+            val index = currentList.indexOfFirst { it.id == id }
+            if (index >= 0) {
+                currentList[index] = currentList[index].copy(fileCount = count)
+                _projects.value = currentList
+                persistProjects(currentList)
+            }
+        }
+    }
+
     fun getProject(id: String): Project? {
         return _projects.value.find { it.id == id }
+    }
+
+    fun findProjectBySourceUri(uriString: String): Project? {
+        return _projects.value.find { it.sourceUri == uriString }
     }
 
     suspend fun deleteProject(id: String) = withContext(Dispatchers.IO) {
@@ -143,5 +181,39 @@ class ProjectRepository(
             _projects.value = updatedList
             persistProjects(updatedList)
         }
+    }
+
+    suspend fun clearCache(): Long = withContext(Dispatchers.IO) {
+        var freedBytes = 0L
+        try {
+            val cacheDir = context.cacheDir
+            cacheDir.listFiles()?.forEach { file ->
+                freedBytes += file.length()
+                file.deleteRecursively()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        freedBytes
+    }
+
+    suspend fun clearNodeModules(): Int = withContext(Dispatchers.IO) {
+        var clearedCount = 0
+        mutex.withLock {
+            for (p in _projects.value) {
+                if (p.status != ProjectStatus.RUNNING && p.status != ProjectStatus.BUILDING) {
+                    val nm = File(p.path, "node_modules")
+                    if (nm.exists() && nm.isDirectory) {
+                        try {
+                            nm.deleteRecursively()
+                            clearedCount++
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                }
+            }
+        }
+        clearedCount
     }
 }

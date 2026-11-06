@@ -20,6 +20,12 @@ object ZipImporter {
         val currentFileName: String
     )
 
+    data class ImportResult(
+        val projectId: String,
+        val targetDir: File,
+        val fileCount: Int
+    )
+
     /**
      * Extracts a zip file from [zipUri] into a new folder in app-private storage: `projects/<projectId>`.
      * Strict Zip-slip vulnerability protection is enforced.
@@ -29,7 +35,7 @@ object ZipImporter {
         zipUri: Uri,
         projectId: String = UUID.randomUUID().toString(),
         onProgress: (ExtractionProgress) -> Unit = {}
-    ): Result<Pair<String, File>> = withContext(Dispatchers.IO) {
+    ): Result<ImportResult> = withContext(Dispatchers.IO) {
         try {
             val projectsRoot = File(context.filesDir, "projects")
             if (!projectsRoot.exists()) {
@@ -55,6 +61,7 @@ object ZipImporter {
 
             // Second pass: extract files with strict zip-slip validation
             var extractedCount = 0
+            var actualFileCount = 0
             context.contentResolver.openInputStream(zipUri)?.use { input ->
                 ZipInputStream(BufferedInputStream(input)).use { zipIn ->
                     var entry: ZipEntry? = zipIn.nextEntry
@@ -76,6 +83,7 @@ object ZipImporter {
                         if (entry.isDirectory) {
                             destinationFile.mkdirs()
                         } else {
+                            actualFileCount++
                             val parent = destinationFile.parentFile
                             if (parent != null && !parent.exists()) {
                                 parent.mkdirs()
@@ -103,7 +111,13 @@ object ZipImporter {
                 }
             }
 
-            Result.success(Pair(projectId, targetDir))
+            Result.success(
+                ImportResult(
+                    projectId = projectId,
+                    targetDir = targetDir,
+                    fileCount = actualFileCount
+                )
+            )
         } catch (e: Exception) {
             e.printStackTrace()
             Result.failure(e)

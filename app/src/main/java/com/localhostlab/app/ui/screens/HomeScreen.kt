@@ -25,20 +25,27 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FolderZip
+import androidx.compose.material.icons.filled.NoteAdd
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -54,16 +61,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.localhostlab.app.data.Project
+import com.localhostlab.app.data.ProjectSourceType
 import com.localhostlab.app.data.ProjectStatus
 import com.localhostlab.app.ui.theme.StatusError
 import com.localhostlab.app.ui.theme.StatusIdle
 import com.localhostlab.app.ui.theme.StatusRunning
 import com.localhostlab.app.ui.theme.StatusSuccess
+import com.localhostlab.app.upload.ProjectTemplates
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -72,7 +83,9 @@ import java.util.Locale
 @Composable
 fun HomeScreen(
     viewModel: HomeViewModel,
-    onProjectClick: (String) -> Unit
+    onProjectClick: (String) -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenEditor: (String) -> Unit
 ) {
     val projects by viewModel.projects.collectAsState()
     val isExtracting by viewModel.isExtracting.collectAsState()
@@ -80,7 +93,7 @@ fun HomeScreen(
     val extractionProgress by viewModel.extractionProgress.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
 
-    var showImportChoiceDialog by remember { mutableStateOf(false) }
+    var showNewProjectDialog by remember { mutableStateOf(false) }
 
     val zipPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -112,27 +125,16 @@ fun HomeScreen(
                         )
                     }
                 },
+                actions = {
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(imageVector = Icons.Default.Settings, contentDescription = "Settings")
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
                     titleContentColor = MaterialTheme.colorScheme.onBackground
                 )
             )
-        },
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = { showImportChoiceDialog = true },
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = "Import Project")
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(text = "Import Project", fontWeight = FontWeight.SemiBold)
-                }
-            }
         }
     ) { paddingValues ->
         Box(
@@ -142,6 +144,7 @@ fun HomeScreen(
         ) {
             if (projects.isEmpty()) {
                 EmptyProjectsState(
+                    onPickFolderClick = { folderPickerLauncher.launch(null) },
                     onUploadZipClick = {
                         zipPickerLauncher.launch(
                             arrayOf(
@@ -151,9 +154,7 @@ fun HomeScreen(
                             )
                         )
                     },
-                    onSelectFolderClick = {
-                        folderPickerLauncher.launch(null)
-                    }
+                    onNewProjectClick = { showNewProjectDialog = true }
                 )
             } else {
                 LazyColumn(
@@ -161,6 +162,25 @@ fun HomeScreen(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    // Quick Action Bar at Top
+                    item {
+                        QuickActionBar(
+                            onPickFolder = { folderPickerLauncher.launch(null) },
+                            onUploadZip = {
+                                zipPickerLauncher.launch(
+                                    arrayOf(
+                                        "application/zip",
+                                        "application/x-zip-compressed",
+                                        "application/octet-stream"
+                                    )
+                                )
+                            },
+                            onNewProject = { showNewProjectDialog = true }
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                    }
+
+                    // Project Cards
                     items(projects, key = { it.id }) { project ->
                         ProjectCard(
                             project = project,
@@ -168,126 +188,7 @@ fun HomeScreen(
                             onDelete = { viewModel.deleteProject(project.id) }
                         )
                     }
-                    // Spacer for FAB clearance
-                    item { Spacer(modifier = Modifier.height(72.dp)) }
                 }
-            }
-
-            // Choice Dialog: ZIP vs Folder
-            if (showImportChoiceDialog) {
-                AlertDialog(
-                    onDismissRequest = { showImportChoiceDialog = false },
-                    title = {
-                        Text(
-                            text = "Import Vite Project",
-                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
-                        )
-                    },
-                    text = {
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Text(
-                                text = "Choose how you would like to import your Vite React project:",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-
-                            // Option 1: ZIP Archive
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        showImportChoiceDialog = false
-                                        zipPickerLauncher.launch(
-                                            arrayOf(
-                                                "application/zip",
-                                                "application/x-zip-compressed",
-                                                "application/octet-stream"
-                                            )
-                                        )
-                                    },
-                                shape = RoundedCornerShape(12.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                                )
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(16.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.FolderZip,
-                                        contentDescription = "Upload ZIP",
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(32.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(16.dp))
-                                    Column {
-                                        Text(
-                                            text = "Upload ZIP Archive",
-                                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                                        )
-                                        Text(
-                                            text = "Pick a compressed .zip project file",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            }
-
-                            // Option 2: Project Folder
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        showImportChoiceDialog = false
-                                        folderPickerLauncher.launch(null)
-                                    },
-                                shape = RoundedCornerShape(12.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                                )
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(16.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.FolderOpen,
-                                        contentDescription = "Select Folder",
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(32.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(16.dp))
-                                    Column {
-                                        Text(
-                                            text = "Select Project Folder",
-                                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                                        )
-                                        Text(
-                                            text = "Pick an uncompressed folder from storage",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    confirmButton = {},
-                    dismissButton = {
-                        TextButton(onClick = { showImportChoiceDialog = false }) {
-                            Text(text = "Cancel")
-                        }
-                    }
-                )
             }
 
             // Extraction / Copy Progress Dialog
@@ -309,8 +210,8 @@ fun HomeScreen(
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = "Processed ${progress.extractedCount} of ${progress.totalCount} files",
-                                    style = MaterialTheme.typography.bodySmall
+                                    text = "Copying ${progress.extractedCount} of ${progress.totalCount} files",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
                                 )
                                 Text(
                                     text = progress.currentFileName,
@@ -332,18 +233,96 @@ fun HomeScreen(
                 )
             }
 
-            // Error Dialog
-            if (errorMessage != null) {
+            // Error Dialog (Checking stage validation or import failure)
+            errorMessage?.let { error ->
                 AlertDialog(
                     onDismissRequest = { viewModel.dismissError() },
-                    title = { Text(text = "Import Error") },
-                    text = { Text(text = errorMessage ?: "") },
+                    title = {
+                        Text(
+                            text = error.title,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                    },
+                    text = { Text(text = error.reason) },
                     confirmButton = {
                         Button(onClick = { viewModel.dismissError() }) {
                             Text(text = "OK")
                         }
                     }
                 )
+            }
+
+            // New Project Starter Template Dialog
+            if (showNewProjectDialog) {
+                NewProjectDialog(
+                    onDismiss = { showNewProjectDialog = false },
+                    onCreate = { name, template ->
+                        showNewProjectDialog = false
+                        viewModel.handleCreateNewProject(name, template) { newId ->
+                            onOpenEditor(newId)
+                        }
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun QuickActionBar(
+    onPickFolder: () -> Unit,
+    onUploadZip: () -> Unit,
+    onNewProject: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            // Big Prominent Primary Button: Pick Folder
+            Button(
+                onClick = onPickFolder,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+            ) {
+                Icon(imageVector = Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(22.dp))
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = "Pick React Project Folder",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilledTonalButton(
+                    onClick = onUploadZip,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Upload ZIP")
+                }
+
+                FilledTonalButton(
+                    onClick = onNewProject,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.NoteAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("New Project")
+                }
             }
         }
     }
@@ -358,7 +337,6 @@ fun ProjectCard(
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
 
-    // Spring bounce animation on click
     val cardScale by animateFloatAsState(
         targetValue = if (isPressed) 0.96f else 1f,
         animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
@@ -375,9 +353,7 @@ fun ProjectCard(
                 onClick = onClick
             ),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        ),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -391,7 +367,11 @@ fun ProjectCard(
                     modifier = Modifier.weight(1f)
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.Code,
+                        imageVector = when (project.sourceType) {
+                            ProjectSourceType.FOLDER -> Icons.Default.FolderOpen
+                            ProjectSourceType.ZIP -> Icons.Default.FolderZip
+                            ProjectSourceType.MANUAL -> Icons.Outlined.Code
+                        },
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(24.dp)
@@ -408,17 +388,37 @@ fun ProjectCard(
                 StatusBadge(status = project.status)
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Source: ${project.sourceType.getDisplayName()}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (project.fileCount > 0) {
+                    Text(
+                        text = "${project.fileCount} files",
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
 
             Text(
                 text = "Path: ${project.path}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -479,20 +479,21 @@ fun StatusBadge(status: ProjectStatus) {
 
 @Composable
 fun EmptyProjectsState(
+    onPickFolderClick: () -> Unit,
     onUploadZipClick: () -> Unit,
-    onSelectFolderClick: () -> Unit
+    onNewProjectClick: () -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(32.dp),
+            .padding(28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
         Icon(
-            imageVector = Icons.Default.FolderZip,
+            imageVector = Icons.Default.FolderOpen,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
             modifier = Modifier.size(80.dp)
         )
 
@@ -500,39 +501,124 @@ fun EmptyProjectsState(
 
         Text(
             text = "No projects yet",
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
             color = MaterialTheme.colorScheme.onBackground
         )
 
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Pick a ZIP archive or select a project folder of a Vite React project to run it on localhost and preview it directly in the app.",
+            text = "Pick a React (Vite) project folder from your phone storage or upload a ZIP to run and preview on localhost.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(28.dp))
 
+        // Big Prominent Primary Button
         Button(
+            onClick = onPickFolderClick,
+            modifier = Modifier
+                .fillMaxWidth(0.9f)
+                .height(52.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+        ) {
+            Icon(imageVector = Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(24.dp))
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(text = "Pick React Project Folder", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        FilledTonalButton(
             onClick = onUploadZipClick,
-            modifier = Modifier.fillMaxWidth(0.85f)
+            modifier = Modifier.fillMaxWidth(0.9f),
+            shape = RoundedCornerShape(12.dp)
         ) {
             Icon(imageVector = Icons.Default.FolderZip, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
             Text(text = "Upload Project ZIP")
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-        FilledTonalButton(
-            onClick = onSelectFolderClick,
-            modifier = Modifier.fillMaxWidth(0.85f)
+        OutlinedButton(
+            onClick = onNewProjectClick,
+            modifier = Modifier.fillMaxWidth(0.9f),
+            shape = RoundedCornerShape(12.dp)
         ) {
-            Icon(imageVector = Icons.Default.FolderOpen, contentDescription = null)
+            Icon(imageVector = Icons.Default.NoteAdd, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
-            Text(text = "Select Project Folder")
+            Text(text = "New Project (Starter Template)")
         }
     }
+}
+
+@Composable
+fun NewProjectDialog(
+    onDismiss: () -> Unit,
+    onCreate: (String, ProjectTemplates.TemplateType) -> Unit
+) {
+    var projectName by remember { mutableStateOf("my-react-app") }
+    var selectedTemplate by remember { mutableStateOf(ProjectTemplates.TemplateType.REACT_TS) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("New React Project", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedTextField(
+                    value = projectName,
+                    onValueChange = { projectName = it },
+                    label = { Text("Project Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Text(
+                    text = "Choose Starter Template:",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
+                )
+
+                ProjectTemplates.TemplateType.values().forEach { template ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selectedTemplate = template }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = (selectedTemplate == template),
+                            onClick = { selectedTemplate = template }
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(text = template.title, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
+                            Text(text = template.description, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (projectName.isNotBlank()) {
+                        onCreate(projectName.trim(), selectedTemplate)
+                    }
+                }
+            ) {
+                Text("Create & Edit")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
 }

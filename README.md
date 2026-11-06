@@ -1,35 +1,68 @@
 # LocalHostLab (v1)
 
-**LocalHostLab** is an Android application built with **Kotlin + Jetpack Compose** (Material 3) that allows developers to import, extract, run, and preview **Vite React projects** locally on Android.
+**LocalHostLab** is an Android application built with **Kotlin + Jetpack Compose** (Material 3) that allows developers to import, create, edit, run, and preview **React (Vite) projects** locally on Android devices without external dependencies.
+
+Owner / Author: **MD Shahid**
 
 ---
 
 ## 📱 Features
 
-1. **Animated Splash Screen:** Smooth spring animation welcoming the user before loading projects.
-2. **Project List & Storage:** Manage imported projects stored in app-private storage (`projects/<projectId>/`).
-3. **Dual Import (ZIP Archive + Project Folder):**
-   - **ZIP Archive:** Pick `.zip` files via `ActivityResultContracts.OpenDocument` with canonical Zip-slip defense.
-   - **Project Folder:** Directly select uncompressed project folders via `ActivityResultContracts.OpenDocumentTree` (Storage Access Framework).
-   - High-throughput streaming with 64KB buffers and smart `.git` and `node_modules` filtering to prevent SAF IPC bottlenecks and ANRs.
-   - Real-time progress indicator displaying processed file count and current file name.
-4. **Vite Project Verification:**
-   - Inspects `package.json` for validity.
-   - Ensures `vite` is present in `dependencies` or `devDependencies`.
-   - Rejects invalid archives with a clear error dialog ("This is not a Vite React project.").
-5. **Local HTTP Server & Runner:**
-   - Step 1: `npm install` inside the project folder.
+1. **Animated Splash Screen:**
+   - 2-second splash screen with animated glowing logo and typography transitioning smoothly to the Home screen.
+2. **Project List & Storage Management:**
+   - Saved projects indexed in app-private storage (`projects.json` and `projects/<id>/`).
+   - Project cards show: project name, running status, source type (`Folder`, `ZIP`, `Manual`), file count, and last run timestamp.
+   - Spring bounce animations and smooth navigation transitions.
+3. **Import Whole Folder (Main Feature):**
+   - Single-action folder picker via Storage Access Framework (`ActivityResultContracts.OpenDocumentTree`).
+   - Copies the entire React project folder structure recursively into private app storage (`projects/<id>/`).
+   - Only copies the selected folder's contents and never its parent directory.
+   - Smart exclusion: automatically skips `node_modules`, `dist`, `.git`, `.next`, `.cache`, and all hidden system files (`.*`).
+   - High-speed 64KB stream buffers with directory traversal defense.
+   - Real-time progress bar and live file counter ("Copying 42 of 58 files").
+   - **Re-sync Capability:** Picking the same folder again updates/replaces files while preserving the project ID and configuration.
+4. **ZIP Archive Import:**
+   - Storage Access Framework file picker (`ActivityResultContracts.OpenDocument`).
+   - Strict canonical Zip-slip vulnerability protection.
+   - Accurate file counting and live extraction progress.
+5. **Checking Stage & Validation:**
+   - Validates that `package.json` exists and contains valid JSON.
+   - Validates that `vite` is present in `dependencies` or `devDependencies`.
+   - Validates that `index.html` exists at the project root.
+   - On mismatch, displays a clear alert dialog: **"Ye React (Vite) project nahi lagta"** with the exact failure reason.
+6. **Built-in Code Editor & Manual Projects ("New Project"):**
+   - Starter template selector:
+     - **React + Vite + TypeScript**
+     - **React + Vite + Tailwind CSS**
+     - **Empty React Project**
+   - Built-in full-featured code editor:
+     - Monospace font with real-time line numbers gutter.
+     - Fast syntax highlighting for JS, JSX, TS, TSX, CSS, JSON, and Markdown.
+     - Multi-tab file management with close buttons.
+     - Project File Tree drawer with Add File, Add Folder, Rename, and Delete (with confirmation dialog).
+     - Auto-indentation preserving leading whitespace.
+     - Undo and Redo history stack.
+     - Find and Replace bar (Search, Replace Once, Replace All).
+     - Unsaved-changes confirmation dialog on exit.
+7. **Local HTTP Server & Run Pipeline:**
+   - Step 1: `npm install` inside the project directory.
    - Step 2: `npm run build`.
-   - Step 3: Lightweight in-process static HTTP server listening on loopback `127.0.0.1` starting at port 3000 (first free port).
-   - **SPA Fallback:** All non-file routes automatically fallback to `index.html`.
-6. **Live Console Log View:**
-   - Auto-scrolling, monospace build and server console output.
-   - "Copy log" button for sharing and debugging.
-   - Failure dialog capturing the failed step and last 20 log lines with "Retry" and "Copy log".
-7. **Full-Screen WebView Preview:**
-   - Direct preview of `http://127.0.0.1:<port>/`.
-   - JavaScript and DOM storage enabled.
-   - Top bar with back, refresh, URL pill, and "Open in Chrome" external browser launcher.
+   - Step 3: Lightweight static HTTP server listening on loopback `127.0.0.1` starting at port 3000 (auto-increments to first free port) serving `dist/` with single-page-app (SPA) fallback to `index.html`.
+   - Smart failure dialog showing failing step, last 20 log lines, Retry, Copy Log, and an intelligent **"Fix suggestion"** line.
+   - Celebration: floating confetti particle animation upon successful launch.
+   - Only one project runs at a time; starting another stops the previous one.
+8. **Foreground Service:**
+   - `ServerForegroundService` keeps the HTTP server running with a persistent Android notification and a "Stop" action while the app is in the background.
+9. **Full-Screen WebView Preview:**
+   - Direct in-app preview of `http://127.0.0.1:<port>/` with JavaScript and DOM storage enabled.
+   - Editable URL bar with Go action to test custom routes.
+   - Back, Refresh, and "Open in Chrome" external browser buttons.
+10. **Settings & Maintenance:**
+    - Appearance / Theme toggle: System Default, Light Theme, Dark Theme.
+    - Default port configuration.
+    - Clear cache and export files.
+    - Clean `node_modules` across idle projects to reclaim device storage.
 
 ---
 
@@ -49,8 +82,9 @@ LocalHostLab/
 │       ├── AndroidManifest.xml
 │       ├── res/
 │       │   ├── values/ (strings.xml, colors.xml, themes.xml)
-│       │   ├── drawable/ (ic_launcher_background.xml, ic_launcher_foreground.xml)
-│       │   └── mipmap-anydpi-v26/ (ic_launcher.xml, ic_launcher_round.xml)
+│       │   ├── xml/ (file_paths.xml)
+│       │   ├── drawable/
+│       │   └── mipmap-anydpi-v26/
 │       └── java/com/localhostlab/app/
 │           ├── MainActivity.kt
 │           ├── navigation/
@@ -58,24 +92,33 @@ LocalHostLab/
 │           │   └── NavGraph.kt
 │           ├── ui/
 │           │   ├── theme/ (Color.kt, Theme.kt, Type.kt)
+│           │   ├── components/
+│           │   │   └── ConfettiView.kt
 │           │   └── screens/
 │           │       ├── SplashScreen.kt
 │           │       ├── HomeScreen.kt
 │           │       ├── HomeViewModel.kt
 │           │       ├── ProjectScreen.kt
 │           │       ├── ProjectViewModel.kt
-│           │       └── PreviewScreen.kt
+│           │       ├── PreviewScreen.kt
+│           │       ├── EditorScreen.kt
+│           │       ├── EditorViewModel.kt
+│           │       ├── SettingsScreen.kt
+│           │       └── SettingsViewModel.kt
 │           ├── data/
 │           │   ├── Project.kt
 │           │   └── ProjectRepository.kt
 │           ├── upload/
 │           │   ├── ZipImporter.kt
 │           │   ├── FolderImporter.kt
-│           │   └── ProjectChecker.kt
+│           │   ├── ProjectChecker.kt
+│           │   ├── ProjectExporter.kt
+│           │   └── ProjectTemplates.kt
 │           └── run/
 │               ├── StaticServer.kt
 │               ├── NodeEngine.kt
 │               └── ProjectRunner.kt
+│               └── ServerForegroundService.kt
 ├── .github/workflows/build.yml
 └── README.md
 ```
@@ -91,11 +134,8 @@ LocalHostLab/
 
 ### Build with Gradle CLI
 ```bash
-# Assemble Debug APK
 ./gradlew assembleDebug
-
-# Output APK path:
-# app/build/outputs/apk/debug/app-debug.apk
+# Output: app/build/outputs/apk/debug/app-debug.apk
 ```
 
 ### GitHub Actions CI/CD
@@ -103,32 +143,3 @@ Every push to `main` triggers `.github/workflows/build.yml`, which:
 1. Compiles the debug APK on Ubuntu with JDK 17 and Gradle 8.7.
 2. Uploads `LocalHostLab-debug` as a workflow artifact.
 3. Automatically publishes a GitHub Release tagged `v1.0.<run_number>` with `app-debug.apk` attached.
-
----
-
-## 🧪 Testing with a Sample Vite React ZIP
-
-To test the upload and preview flow:
-
-1. Create a minimal Vite React project or use an existing one:
-   ```bash
-   npm create vite@latest sample-app -- --template react
-   cd sample-app
-   npm install
-   npm run build
-   ```
-2. Archive the project directory into a ZIP file:
-   ```bash
-   zip -r sample-app.zip .
-   ```
-3. Transfer `sample-app.zip` to your Android device.
-4. Open **LocalHostLab**, tap **"Upload ZIP"**, and select `sample-app.zip`.
-5. The app verifies `package.json`, displays the project card on the Home screen, and lets you tap **"Run"** and **"Preview"**!
-
----
-
-## 📌 Node.js Mobile Integration Notes
-
-- For on-device `npm install` and `npm run build` execution without pre-built assets, Node.js is integrated via **nodejs-mobile** (`libnode.so` and JNI bindings `startNodeWithArguments`).
-- When pre-built `dist/` is present in the ZIP, the built-in pure Kotlin `StaticServer` immediately serves the project at `http://127.0.0.1:3000/` with SPA routing and zero external dependencies.
-- See `app/src/main/java/com/localhostlab/app/run/NodeEngine.kt` for native linking configuration.

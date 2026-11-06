@@ -14,18 +14,23 @@ object ProjectChecker {
             val packageJsonFile: File
         ) : CheckResult()
 
-        data class Failure(val reason: String) : CheckResult()
+        data class Failure(
+            val title: String = "Ye React (Vite) project nahi lagta",
+            val reason: String
+        ) : CheckResult()
     }
 
     /**
-     * Inspects the extracted directory to ensure it is a valid Vite React project.
-     * Looks for package.json in the root directory, or inside an immediate single subfolder
-     * (e.g. from GitHub zip exports like 'repo-main/').
+     * Inspects the imported directory to ensure it is a valid React (Vite) project:
+     * 1. Root contains package.json (or single immediate subdirectory for nested zips).
+     * 2. package.json is valid JSON.
+     * 3. 'vite' is listed in 'dependencies' or 'devDependencies'.
+     * 4. index.html exists at the project root.
      */
     suspend fun verifyProject(extractedDir: File, fallbackName: String): CheckResult =
         withContext(Dispatchers.IO) {
             try {
-                // Find package.json: root first, or single subfolder
+                // Find project root: either root directly or single nested folder
                 var packageJson = File(extractedDir, "package.json")
                 var projectRoot = extractedDir
 
@@ -41,19 +46,25 @@ object ProjectChecker {
                 }
 
                 if (!packageJson.exists()) {
-                    return@withContext CheckResult.Failure("This is not a Vite React project. (Missing package.json)")
+                    return@withContext CheckResult.Failure(
+                        reason = "package.json file missing at project root."
+                    )
                 }
 
                 val jsonContent = try {
                     packageJson.readText()
                 } catch (e: Exception) {
-                    return@withContext CheckResult.Failure("Unable to read package.json.")
+                    return@withContext CheckResult.Failure(
+                        reason = "Unable to read package.json file."
+                    )
                 }
 
                 val jsonObject = try {
                     JSONObject(jsonContent)
                 } catch (e: Exception) {
-                    return@withContext CheckResult.Failure("Invalid package.json format.")
+                    return@withContext CheckResult.Failure(
+                        reason = "package.json format is invalid JSON: ${e.message}"
+                    )
                 }
 
                 // Check for 'vite' in dependencies or devDependencies
@@ -64,10 +75,20 @@ object ProjectChecker {
                         (devDependencies != null && devDependencies.has("vite"))
 
                 if (!hasVite) {
-                    return@withContext CheckResult.Failure("This is not a Vite React project.")
+                    return@withContext CheckResult.Failure(
+                        reason = "'vite' is not listed in dependencies or devDependencies inside package.json."
+                    )
                 }
 
-                // Determine project name: package.json "name" or fallback
+                // Check for index.html at project root
+                val indexHtml = File(projectRoot, "index.html")
+                if (!indexHtml.exists()) {
+                    return@withContext CheckResult.Failure(
+                        reason = "index.html file missing at project root."
+                    )
+                }
+
+                // Project name comes from package.json "name" or fallback
                 val rawName = jsonObject.optString("name", "").trim()
                 val finalName = if (rawName.isNotEmpty()) rawName else fallbackName
 
@@ -77,7 +98,9 @@ object ProjectChecker {
                     packageJsonFile = packageJson
                 )
             } catch (e: Exception) {
-                CheckResult.Failure("Error inspecting project: ${e.message ?: "Unknown error"}")
+                CheckResult.Failure(
+                    reason = "Error inspecting project: ${e.message ?: "Unknown error"}"
+                )
             }
         }
 }

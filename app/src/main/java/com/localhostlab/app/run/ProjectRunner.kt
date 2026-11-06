@@ -21,7 +21,8 @@ import java.io.File
 data class RunnerFailure(
     val stepName: String,
     val last20Logs: List<String>,
-    val project: Project
+    val project: Project,
+    val fixSuggestion: String
 )
 
 class ProjectRunner(
@@ -54,6 +55,14 @@ class ProjectRunner(
 
     private val _showSuccessSnackbar = MutableStateFlow(false)
     val showSuccessSnackbar: StateFlow<Boolean> = _showSuccessSnackbar.asStateFlow()
+
+    init {
+        ServerForegroundService.stopCallback = {
+            scope.launch {
+                stopRunningProject()
+            }
+        }
+    }
 
     fun dismissSuccessSnackbar() {
         _showSuccessSnackbar.value = false
@@ -158,6 +167,13 @@ class ProjectRunner(
                     lastRun = System.currentTimeMillis()
                 )
 
+                // Start foreground service with persistent notification and stop action
+                try {
+                    ServerForegroundService.startService(context, project.name, port)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+
                 _showSuccessSnackbar.value = true
             }
         }
@@ -167,11 +183,36 @@ class ProjectRunner(
         val currentLogs = _logs.value
         val last20 = if (currentLogs.size > 20) currentLogs.takeLast(20) else currentLogs
 
+        val suggestion = generateFixSuggestion(stepName, last20)
+
         repository.updateProjectStatus(project.id, ProjectStatus.ERROR)
         _currentStepName.value = null
         _stepProgress.value = null
-        _lastFailure.value = RunnerFailure(stepName, last20, project)
+        _lastFailure.value = RunnerFailure(stepName, last20, project, suggestion)
         appendLog("[LocalHostLab] Pipeline stopped due to failure at $stepName")
+        appendLog("[LocalHostLab] Fix suggestion: $suggestion")
+    }
+
+    private fun generateFixSuggestion(stepName: String, logs: List<String>): String {
+        val joined = logs.joinToString(" ").lowercase()
+        return when {
+            "enotfound" in joined || "404" in joined || "network" in joined || "econnrefused" in joined ->
+                "Check your internet connection and verify that all dependencies in package.json exist on npm."
+            "typescript" in joined || "tsc" in joined || "ts(" in joined ->
+                "Check your TypeScript types or run without strict errors. Check tsconfig.json syntax."
+            "tailwind" in joined || "postcss" in joined || "autoprefixer" in joined ->
+                "Ensure tailwindcss, postcss, and autoprefixer are installed in devDependencies with valid config files."
+            "vite" in joined && "not found" in joined ->
+                "Ensure 'vite' is listed in devDependencies and npm install finishes successfully."
+            "syntaxerror" in joined || "unexpected token" in joined ->
+                "Check JSX/TSX syntax error or unclosed tags in the reported file."
+            "missing script: \"build\"" in joined || "missing script: build" in joined ->
+                "Add '\"build\": \"vite build\"' inside the 'scripts' section of package.json."
+            "dist" in joined ->
+                "Make sure 'npm run build' outputs files into the 'dist/' folder."
+            else ->
+                "Inspect the terminal output above and verify package.json dependencies."
+        }
     }
 
     suspend fun stopRunningProject() = withContext(Dispatchers.IO) {
@@ -181,6 +222,11 @@ class ProjectRunner(
             if (project != null) {
                 repository.updateProjectStatus(project.id, ProjectStatus.IDLE)
                 appendLog("[LocalHostLab] Project ${project.name} stopped.")
+            }
+            try {
+                ServerForegroundService.stopService(context)
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }
@@ -207,7 +253,7 @@ class ProjectRunner(
 
     fun copyFailureLogsToClipboard(context: Context) {
         val failure = _lastFailure.value ?: return
-        val text = "Step: ${failure.stepName}\n\n" + failure.last20Logs.joinToString("\n")
+        val text = "Step: ${failure.stepName}\nSuggestion: ${failure.fixSuggestion}\n\n" + failure.last20Logs.joinToString("\n")
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val clip = ClipData.newPlainText("LocalHostLab Error Logs", text)
         clipboard.setPrimaryClip(clip)

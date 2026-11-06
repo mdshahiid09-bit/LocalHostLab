@@ -8,15 +8,23 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.localhostlab.app.data.Project
 import com.localhostlab.app.data.ProjectRepository
+import com.localhostlab.app.data.ProjectSourceType
 import com.localhostlab.app.data.ProjectStatus
 import com.localhostlab.app.upload.FolderImporter
 import com.localhostlab.app.upload.ProjectChecker
+import com.localhostlab.app.upload.ProjectTemplates
 import com.localhostlab.app.upload.ZipImporter
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.UUID
+
+data class ImportError(
+    val title: String,
+    val reason: String
+)
 
 class HomeViewModel(
     application: Application,
@@ -35,11 +43,88 @@ class HomeViewModel(
     private val _extractionProgress = MutableStateFlow<ZipImporter.ExtractionProgress?>(null)
     val extractionProgress: StateFlow<ZipImporter.ExtractionProgress?> = _extractionProgress.asStateFlow()
 
-    private val _errorMessage = MutableStateFlow<String?>(null)
-    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+    private val _errorMessage = MutableStateFlow<ImportError?>(null)
+    val errorMessage: StateFlow<ImportError?> = _errorMessage.asStateFlow()
 
     fun dismissError() {
         _errorMessage.value = null
+    }
+
+    fun handleFolderSelected(uri: Uri) {
+        viewModelScope.launch {
+            _isImporting.value = true
+            _importTitle.value = "Scanning & Copying Folder..."
+            _errorMessage.value = null
+            _extractionProgress.value = null
+
+            val context = getApplication<Application>()
+            val rootDoc = DocumentFile.fromTreeUri(context, uri)
+            val fallbackName = rootDoc?.name?.takeIf { it.isNotBlank() } ?: "vite-project"
+
+            // Check if existing project was imported from this sourceUri (Re-sync)
+            val existing = repository.findProjectBySourceUri(uri.toString())
+            val targetProjectId = existing?.id ?: UUID.randomUUID().toString()
+
+            val importResult = FolderImporter.importFolder(
+                context = context,
+                treeUri = uri,
+                projectId = targetProjectId
+            ) { progress ->
+                _extractionProgress.value = ZipImporter.ExtractionProgress(
+                    totalCount = progress.totalCount,
+                    extractedCount = progress.copiedCount,
+                    currentFileName = progress.currentFileName
+                )
+            }
+
+            if (importResult.isFailure) {
+                _isImporting.value = false
+                _errorMessage.value = ImportError(
+                    title = "Import Failed",
+                    reason = importResult.exceptionOrNull()?.message ?: "Unknown error while copying folder."
+                )
+                return@launch
+            }
+
+            val result = importResult.getOrThrow()
+
+            // Verification Stage: package.json, vite dependency, index.html at root
+            val checkResult = ProjectChecker.verifyProject(result.targetDir, fallbackName)
+
+            when (checkResult) {
+                is ProjectChecker.CheckResult.Failure -> {
+                    // Clean up if new project failed validation
+                    if (existing == null) {
+                        try {
+                            result.targetDir.deleteRecursively()
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                    _isImporting.value = false
+                    _errorMessage.value = ImportError(
+                        title = checkResult.title,
+                        reason = checkResult.reason
+                    )
+                }
+                is ProjectChecker.CheckResult.Success -> {
+                    val newProject = Project(
+                        id = targetProjectId,
+                        name = checkResult.projectName,
+                        path = checkResult.actualProjectDir.canonicalPath,
+                        sourceType = ProjectSourceType.FOLDER,
+                        sourceUri = uri.toString(),
+                        fileCount = result.fileCount,
+                        lastRun = existing?.lastRun ?: 0L,
+                        status = existing?.status ?: ProjectStatus.IDLE,
+                        port = existing?.port ?: 3000
+                    )
+                    repository.addOrUpdateProject(newProject)
+                    _isImporting.value = false
+                    _extractionProgress.value = null
+                }
+            }
+        }
     }
 
     fun handleZipSelected(uri: Uri) {
@@ -61,31 +146,39 @@ class HomeViewModel(
 
             if (extractResult.isFailure) {
                 _isImporting.value = false
-                _errorMessage.value = "Extraction failed: ${extractResult.exceptionOrNull()?.message ?: "Unknown error"}"
+                _errorMessage.value = ImportError(
+                    title = "Extraction Failed",
+                    reason = extractResult.exceptionOrNull()?.message ?: "Unknown extraction error."
+                )
                 return@launch
             }
 
-            val (projectId, extractedDir) = extractResult.getOrThrow()
+            val result = extractResult.getOrThrow()
 
-            // Verify project conforms to Vite React structure
-            val checkResult = ProjectChecker.verifyProject(extractedDir, fallbackName)
+            // Verification Stage: package.json, vite, index.html
+            val checkResult = ProjectChecker.verifyProject(result.targetDir, fallbackName)
 
             when (checkResult) {
                 is ProjectChecker.CheckResult.Failure -> {
-                    // Clean up invalid project directory
                     try {
-                        extractedDir.deleteRecursively()
+                        result.targetDir.deleteRecursively()
                     } catch (e: Exception) {
                         e.printStackTrace()
                     }
                     _isImporting.value = false
-                    _errorMessage.value = checkResult.reason
+                    _errorMessage.value = ImportError(
+                        title = checkResult.title,
+                        reason = checkResult.reason
+                    )
                 }
                 is ProjectChecker.CheckResult.Success -> {
                     val newProject = Project(
-                        id = projectId,
+                        id = result.projectId,
                         name = checkResult.projectName,
                         path = checkResult.actualProjectDir.canonicalPath,
+                        sourceType = ProjectSourceType.ZIP,
+                        sourceUri = null,
+                        fileCount = result.fileCount,
                         lastRun = 0L,
                         status = ProjectStatus.IDLE,
                         port = 3000
@@ -98,63 +191,45 @@ class HomeViewModel(
         }
     }
 
-    fun handleFolderSelected(uri: Uri) {
+    fun handleCreateNewProject(
+        projectName: String,
+        template: ProjectTemplates.TemplateType,
+        onCreated: (String) -> Unit
+    ) {
         viewModelScope.launch {
-            _isImporting.value = true
-            _importTitle.value = "Importing Project Folder..."
-            _errorMessage.value = null
-            _extractionProgress.value = null
-
             val context = getApplication<Application>()
-            val rootDoc = DocumentFile.fromTreeUri(context, uri)
-            val fallbackName = rootDoc?.name?.takeIf { it.isNotBlank() } ?: "vite-project"
+            val projectId = UUID.randomUUID().toString()
+            val projectsRoot = File(context.filesDir, "projects")
+            val targetDir = File(projectsRoot, projectId)
 
-            val importResult = FolderImporter.importFolder(
-                context = context,
-                treeUri = uri
-            ) { progress ->
-                _extractionProgress.value = ZipImporter.ExtractionProgress(
-                    totalCount = progress.totalCount,
-                    extractedCount = progress.copiedCount,
-                    currentFileName = progress.currentFileName
+            val templateResult = ProjectTemplates.createProjectFromTemplate(
+                targetDir = targetDir,
+                projectName = projectName,
+                templateType = template
+            )
+
+            if (templateResult.isFailure) {
+                _errorMessage.value = ImportError(
+                    title = "Project Creation Failed",
+                    reason = templateResult.exceptionOrNull()?.message ?: "Unknown error creating starter project."
                 )
-            }
-
-            if (importResult.isFailure) {
-                _isImporting.value = false
-                _errorMessage.value = "Folder import failed: ${importResult.exceptionOrNull()?.message ?: "Unknown error"}"
                 return@launch
             }
 
-            val (projectId, extractedDir) = importResult.getOrThrow()
+            val fileCount = templateResult.getOrThrow()
+            val newProject = Project(
+                id = projectId,
+                name = projectName.trim(),
+                path = targetDir.canonicalPath,
+                sourceType = ProjectSourceType.MANUAL,
+                fileCount = fileCount,
+                lastRun = 0L,
+                status = ProjectStatus.IDLE,
+                port = 3000
+            )
 
-            // Verify project conforms to Vite React structure
-            val checkResult = ProjectChecker.verifyProject(extractedDir, fallbackName)
-
-            when (checkResult) {
-                is ProjectChecker.CheckResult.Failure -> {
-                    try {
-                        extractedDir.deleteRecursively()
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                    _isImporting.value = false
-                    _errorMessage.value = checkResult.reason
-                }
-                is ProjectChecker.CheckResult.Success -> {
-                    val newProject = Project(
-                        id = projectId,
-                        name = checkResult.projectName,
-                        path = checkResult.actualProjectDir.canonicalPath,
-                        lastRun = 0L,
-                        status = ProjectStatus.IDLE,
-                        port = 3000
-                    )
-                    repository.addOrUpdateProject(newProject)
-                    _isImporting.value = false
-                    _extractionProgress.value = null
-                }
-            }
+            repository.addOrUpdateProject(newProject)
+            onCreated(projectId)
         }
     }
 
