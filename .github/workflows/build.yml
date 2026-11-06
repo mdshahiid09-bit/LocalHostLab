@@ -22,24 +22,19 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Ensure Gradle Wrapper Executable and JAR
-        run: |
-          mkdir -p gradle/wrapper
-          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            echo "Downloading gradle-wrapper.jar via curl..."
-            curl -sLo gradle/wrapper/gradle-wrapper.jar https://raw.githubusercontent.com/gradle/gradle/v8.7.0/gradle/wrapper/gradle-wrapper.jar || \
-            curl -sLo gradle/wrapper/gradle-wrapper.jar https://raw.githubusercontent.com/gradle/gradle/master/gradle/wrapper/gradle-wrapper.jar
-          fi
-          chmod +x gradlew
-          ls -lh gradle/wrapper/
-
-      - name: Setup Gradle
+      - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
+      - name: Generate Gradle Wrapper
+        run: |
+          gradle wrapper --gradle-version 8.7
+          chmod +x gradlew
+          ls -lh gradle/wrapper/
+
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace --info
+        run: gradle assembleDebug --stacktrace --info
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
