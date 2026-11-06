@@ -20,7 +20,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.PlayArrow
@@ -110,7 +110,7 @@ fun ProjectScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Back")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -233,7 +233,7 @@ fun ProjectScreen(
                     Spacer(modifier = Modifier.height(6.dp))
                     if (stepProgress != null) {
                         LinearProgressIndicator(
-                            progress = stepProgress!!,
+                            progress = { stepProgress!! },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(6.dp)

@@ -4,6 +4,7 @@ import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.io.OnErrorAction
 
 /**
  * Wrapper for the nodejs-mobile embedded runtime on Android.

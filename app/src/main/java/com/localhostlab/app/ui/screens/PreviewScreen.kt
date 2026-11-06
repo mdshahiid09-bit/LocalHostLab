@@ -22,7 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -100,7 +100,7 @@ fun PreviewScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -130,7 +130,7 @@ fun PreviewScreen(
         ) {
             if (isPageLoading) {
                 LinearProgressIndicator(
-                    progress = (webProgress.coerceIn(0, 100)) / 100f,
+                    progress = { (webProgress.coerceIn(0, 100)) / 100f },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(3.dp),

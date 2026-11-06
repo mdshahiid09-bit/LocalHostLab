@@ -167,7 +167,7 @@ fun HomeScreen(
                             if (progress != null && progress.totalCount > 0) {
                                 val frac = progress.extractedCount.toFloat() / progress.totalCount.toFloat()
                                 LinearProgressIndicator(
-                                    progress = frac,
+                                    progress = { frac },
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(8.dp)
