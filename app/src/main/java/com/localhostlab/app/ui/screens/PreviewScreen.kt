@@ -130,7 +130,7 @@ fun PreviewScreen(
         ) {
             if (isPageLoading) {
                 LinearProgressIndicator(
-                    progress = { (webProgress.coerceIn(0, 100)) / 100f },
+                    progress = (webProgress.coerceIn(0, 100)) / 100f,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(3.dp),

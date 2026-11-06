@@ -233,7 +233,7 @@ fun ProjectScreen(
                     Spacer(modifier = Modifier.height(6.dp))
                     if (stepProgress != null) {
                         LinearProgressIndicator(
-                            progress = { stepProgress!! },
+                            progress = stepProgress!!,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(6.dp)

@@ -150,12 +150,10 @@ fun HomeScreen(
                             onDelete = { viewModel.deleteProject(project.id) }
                         )
                     }
-                    // Spacer for FAB clearance
                     item { Spacer(modifier = Modifier.height(72.dp)) }
                 }
             }
 
-            // Extraction Progress Dialog
             if (isExtracting) {
                 AlertDialog(
                     onDismissRequest = {},
@@ -167,7 +165,7 @@ fun HomeScreen(
                             if (progress != null && progress.totalCount > 0) {
                                 val frac = progress.extractedCount.toFloat() / progress.totalCount.toFloat()
                                 LinearProgressIndicator(
-                                    progress = { frac },
+                                    progress = frac,
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(8.dp)
@@ -197,7 +195,6 @@ fun HomeScreen(
                 )
             }
 
-            // Error Dialog
             if (errorMessage != null) {
                 AlertDialog(
                     onDismissRequest = { viewModel.dismissError() },
@@ -223,7 +220,6 @@ fun ProjectCard(
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
 
-    // Spring bounce animation on click
     val cardScale by animateFloatAsState(
         targetValue = if (isPressed) 0.96f else 1f,
         animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
