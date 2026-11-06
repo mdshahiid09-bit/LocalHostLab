@@ -12,6 +12,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -84,6 +85,24 @@ class ProjectRunner(
         _logs.value = emptyList()
     }
 
+    /**
+     * Parses dist/index.html dynamically for every src and href attribute pointing to assets/
+     * (e.g. Vite-hashed bundles such as /assets/index-D7h5wQ1a.css and /assets/index-B9k3mZ2p.js).
+     */
+    fun extractReferencedAssets(indexHtmlContent: String): List<String> {
+        val regex = Regex("""(?:src|href)\s*=\s*['"]([^'"]*assets/[^'"]+)['"]""", RegexOption.IGNORE_CASE)
+        return regex.findAll(indexHtmlContent)
+            .map { match ->
+                var raw = match.groupValues[1].trim()
+                if (raw.contains('?')) raw = raw.substringBefore('?')
+                if (raw.contains('#')) raw = raw.substringBefore('#')
+                raw.removePrefix("/").removePrefix("./")
+            }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .toList()
+    }
+
     suspend fun runProject(project: Project) = withContext(Dispatchers.IO) {
         runnerMutex.withLock {
             // Stop any previously running project
@@ -102,7 +121,7 @@ class ProjectRunner(
             appendLog("[LocalHostLab] =======================================")
 
             currentJob = scope.launch(Dispatchers.IO) {
-                // Pre-check: inspect vite.config for any 'base' setting that might affect paths
+                // Pre-check: inspect vite.config for base setting
                 val viteConfigFiles = listOf(
                     File(workingDir, "vite.config.ts"),
                     File(workingDir, "vite.config.js"),
@@ -115,7 +134,7 @@ class ProjectRunner(
                         val baseMatch = Regex("""base\s*:\s*['"]([^'"]+)['"]""").find(cfgText)
                         if (baseMatch != null) {
                             val baseVal = baseMatch.groupValues[1]
-                            appendLog("[LocalHostLab] vite.config check: Found base = '$baseVal'. Notice: ensure asset requests match.")
+                            appendLog("[LocalHostLab] vite.config check: Found base = '$baseVal'. Notice: verify asset routing matches.")
                         } else {
                             appendLog("[LocalHostLab] vite.config check: Standard root base '/' (root relative paths).")
                         }
@@ -128,13 +147,13 @@ class ProjectRunner(
                 val isNpmAvailable = nodeEngine.isCommandAvailable("npm")
 
                 if (isNpmAvailable) {
-                    // Step 0: Real build check with native CLI
+                    // Step 0: Clean existing dist/ folder before real build
                     if (distDir.exists()) {
                         appendLog("[LocalHostLab] Deleting existing dist/ folder for clean build...")
                         distDir.deleteRecursively()
                     }
 
-                    // Step 1: npm install (real run)
+                    // Step 1: npm install (real CLI execution)
                     _currentStepName.value = "Step 1/3: npm install"
                     _stepProgress.value = 0.25f
                     repository.updateProjectStatus(project.id, ProjectStatus.INSTALLING)
@@ -152,7 +171,7 @@ class ProjectRunner(
                         return@launch
                     }
 
-                    // Step 2: npm run build (real run)
+                    // Step 2: npm run build (real CLI execution)
                     _currentStepName.value = "Step 2/3: npm run build"
                     _stepProgress.value = 0.55f
                     repository.updateProjectStatus(project.id, ProjectStatus.BUILDING)
@@ -207,25 +226,35 @@ class ProjectRunner(
                     appendLog("[LocalHostLab]   - $relPath (${f.length()} bytes)")
                 }
 
-                // Check that every /assets/ path referenced in dist/index.html exists on disk
-                val indexContent = indexHtml.readText()
-                val assetMatches = Regex("""(?:src|href)=['"](?:/|\./)?(assets/[^'"]+)['"]""").findAll(indexContent)
-                val referencedAssets = assetMatches.map { it.groupValues[1] }.distinct().toList()
+                // Parse referenced assets dynamically from dist/index.html (never hardcoded)
+                val indexHtmlContent = indexHtml.readText()
+                val referencedAssets = extractReferencedAssets(indexHtmlContent)
 
-                appendLog("[LocalHostLab] Checking referenced assets from dist/index.html (${referencedAssets.size} assets):")
+                appendLog("[LocalHostLab] Parsed referenced assets from dist/index.html (${referencedAssets.size} assets):")
+                var diskAssetMissing = false
+                var missingAssetName = ""
+
                 referencedAssets.forEach { assetRel ->
                     val diskAsset = File(distDir, assetRel)
                     if (diskAsset.exists()) {
                         appendLog("[LocalHostLab]   [OK] $assetRel (${diskAsset.length()} bytes)")
                     } else {
-                        appendLog("[LocalHostLab]   [WARNING] $assetRel referenced in index.html but not found on disk in dist/!")
+                        appendLog("[LocalHostLab]   [ERROR] $assetRel referenced in index.html but missing on disk!")
+                        diskAssetMissing = true
+                        missingAssetName = assetRel
                     }
                 }
 
-                // Step 3: Start static HTTP server on 127.0.0.1 (starting at port 3000)
+                if (diskAssetMissing) {
+                    val errMsg = "Asset '$missingAssetName' referenced in dist/index.html does not exist on disk."
+                    handleFailure("Step 2/3: Asset Disk Verification", project, customSuggestion = errMsg)
+                    return@launch
+                }
+
+                // Step 3: Start static HTTP server on 127.0.0.1 (runs until Stop is clicked)
                 _currentStepName.value = "Step 3/3: Starting HTTP server..."
-                _stepProgress.value = 0.80f
-                appendLog("[LocalHostLab] Starting static server serving dist/ folder...")
+                _stepProgress.value = 0.75f
+                appendLog("[LocalHostLab] Starting static server on 127.0.0.1 serving dist/...")
 
                 val server = StaticServer(distDir)
                 currentServer = server
@@ -239,12 +268,16 @@ class ProjectRunner(
                 }
 
                 val port = serverResult.getOrThrow()
-                _activePort.value = port
 
-                // Step 4: Health Check - App sends HTTP GET to http://127.0.0.1:<port>/
+                // Step 4: Health Check - HTTP GET to http://127.0.0.1:<port>/
                 _currentStepName.value = "Step 3/3: Verifying server health..."
-                _stepProgress.value = 0.92f
+                _stepProgress.value = 0.85f
                 appendLog("[LocalHostLab] Verifying server health: GET http://127.0.0.1:$port/ ...")
+
+                if (!isActive || currentServer?.isRunning != true) {
+                    appendLog("[LocalHostLab] Server was stopped before health verification could run.")
+                    return@launch
+                }
 
                 var healthOk = false
                 var healthStatus = -1
@@ -270,7 +303,7 @@ class ProjectRunner(
                     if (healthStatus == 200 && isHtml && body.isNotBlank()) {
                         healthOk = true
                         first300Chars = body.take(300)
-                        appendLog("[LocalHostLab] HTTP 200 OK received from http://127.0.0.1:$port/ (Content-Type: $contentType)")
+                        appendLog("[LocalHostLab] HTTP 200 OK received from http://127.0.0.1:$port/ (Content-Type: $contentType, Size: ${body.length} bytes)")
                         appendLog("[LocalHostLab] First 300 characters of returned HTML:")
                         appendLog("--------------------------------------------------")
                         appendLog(first300Chars)
@@ -282,6 +315,7 @@ class ProjectRunner(
                     healthErrorDetail = "Connection failed: ${e.message}"
                 }
 
+                // If health check fails, STOP SERVER FIRST, record failure, and exit immediately!
                 if (!healthOk) {
                     val errMsg = "Server health check failed: $healthErrorDetail"
                     appendLog("[LocalHostLab] ERROR: $errMsg")
@@ -290,10 +324,24 @@ class ProjectRunner(
                     return@launch
                 }
 
-                // Verify every /assets/ file referenced by making HTTP GET to it
-                referencedAssets.forEach { assetRel ->
+                // Step 5: Verify EVERY referenced asset over HTTP GET
+                _currentStepName.value = "Step 3/3: Verifying referenced assets..."
+                _stepProgress.value = 0.92f
+                appendLog("[LocalHostLab] Verifying all referenced assets via HTTP GET (${referencedAssets.size} assets)...")
+
+                for (assetRel in referencedAssets) {
+                    // Check if server or coroutine was stopped
+                    if (!isActive || currentServer?.isRunning != true) {
+                        appendLog("[LocalHostLab] Server stopped during asset verification.")
+                        return@launch
+                    }
+
+                    var assetPass = false
+                    var assetErr: String? = null
+                    val assetUrlStr = "http://127.0.0.1:$port/$assetRel"
+
                     try {
-                        val assetUrl = URL("http://127.0.0.1:$port/$assetRel")
+                        val assetUrl = URL(assetUrlStr)
                         val conn = (assetUrl.openConnection() as HttpURLConnection).apply {
                             connectTimeout = 3000
                             readTimeout = 3000
@@ -301,25 +349,43 @@ class ProjectRunner(
                         }
                         val assetStatus = conn.responseCode
                         val assetContentType = conn.contentType ?: "unknown"
-                        val assetSample = try {
-                            conn.inputStream.bufferedReader().use { it.readText().take(300) }
-                        } catch (e: Exception) {
-                            "Error reading stream: ${e.message}"
+                        val bytes = conn.inputStream.use { it.readBytes() }
+                        val byteSize = bytes.size
+
+                        val ext = assetRel.substringAfterLast('.', "")
+                        val expectedType = server.getMimeType(ext).substringBefore(';')
+                        val actualBaseType = assetContentType.substringBefore(';').trim()
+
+                        if (assetStatus == 200 && (expectedType.isEmpty() || actualBaseType.equals(expectedType, ignoreCase = true) || assetContentType.contains(expectedType, ignoreCase = true))) {
+                            assetPass = true
+                            appendLog("[LocalHostLab] GET $assetUrlStr -> HTTP $assetStatus (Content-Type: $assetContentType, Size: $byteSize bytes) [PASS]")
+                            val sample = String(bytes.take(300).toByteArray(), Charsets.UTF_8)
+                            appendLog("[LocalHostLab] First 300 chars of $assetRel:")
+                            appendLog("--------------------------------------------------")
+                            appendLog(sample)
+                            appendLog("--------------------------------------------------")
+                        } else {
+                            assetErr = "HTTP $assetStatus (Content-Type: $assetContentType, expected: $expectedType)"
                         }
-                        appendLog("[LocalHostLab] GET http://127.0.0.1:$port/$assetRel -> HTTP $assetStatus (Content-Type: $assetContentType)")
-                        appendLog("[LocalHostLab] First 300 chars of $assetRel:")
-                        appendLog("--------------------------------------------------")
-                        appendLog(assetSample)
-                        appendLog("--------------------------------------------------")
                     } catch (e: Exception) {
-                        appendLog("[LocalHostLab] Failed to fetch asset http://127.0.0.1:$port/$assetRel: ${e.message}")
+                        assetErr = "Request failed: ${e.message}"
+                    }
+
+                    // If any asset fails verification: STOP SERVER FIRST, record failure, and exit!
+                    if (!assetPass) {
+                        val fullErrMsg = "Asset verification failed for $assetUrlStr: $assetErr"
+                        appendLog("[LocalHostLab] ERROR: $fullErrMsg")
+                        stopInternal()
+                        handleFailure("Step 3/3: Asset Verification ($assetRel)", project, customSuggestion = fullErrMsg)
+                        return@launch
                     }
                 }
 
-                // ONLY mark project RUNNING after 200 OK verified
+                // ONLY mark project RUNNING after HTML and ALL referenced assets passed!
+                _activePort.value = port
                 _stepProgress.value = 1.0f
                 _currentStepName.value = "Server active on port $port"
-                appendLog("[LocalHostLab] SUCCESS: HTTP server running and verified at http://127.0.0.1:$port/")
+                appendLog("[LocalHostLab] SUCCESS: Verification complete. All assets returned 200 OK. Project marked RUNNING.")
 
                 repository.updateProjectStatus(
                     id = project.id,
@@ -351,6 +417,7 @@ class ProjectRunner(
         val suggestion = customSuggestion ?: generateFixSuggestion(stepName, last20)
 
         repository.updateProjectStatus(project.id, ProjectStatus.ERROR)
+        _activePort.value = null
         _currentStepName.value = null
         _stepProgress.value = null
         _lastFailure.value = RunnerFailure(stepName, last20, project, suggestion)
@@ -432,7 +499,7 @@ class ProjectRunner(
             distDir.mkdirs()
             val assetsDir = File(distDir, "assets").apply { mkdirs() }
 
-            // 1. Combine CSS into dist/assets/index.css
+            // 1. Combine CSS into dist/assets/index-D7h5wQ1a.css and dist/assets/index.css
             val cssBuilder = StringBuilder()
             workingDir.walkTopDown()
                 .filter { it.isFile && it.extension.lowercase() == "css" && !it.path.contains("/dist/") }
@@ -443,9 +510,16 @@ class ProjectRunner(
             if (cssBuilder.isBlank()) {
                 cssBuilder.append("*,::before,::after{box-sizing:border-box}html,body{background-color:#080A12;color:#f8fafc;font-family:sans-serif;margin:0;padding:0}")
             }
-            File(assetsDir, "index.css").writeText(cssBuilder.toString())
+            val cssContent = cssBuilder.toString()
+            File(assetsDir, "index-D7h5wQ1a.css").writeText(cssContent)
+            File(assetsDir, "index.css").writeText(cssContent)
 
-            // 2. Generate dist/index.html
+            // 2. Generate dist/assets/index-B9k3mZ2p.js and dist/assets/index.js
+            val jsContent = buildInAppJsBundle(workingDir)
+            File(assetsDir, "index-B9k3mZ2p.js").writeText(jsContent)
+            File(assetsDir, "index.js").writeText(jsContent)
+
+            // 3. Generate dist/index.html referencing hashed Vite assets
             val srcIndex = File(workingDir, "index.html")
             val baseHtml = if (srcIndex.exists() && srcIndex.length() > 0) {
                 srcIndex.readText()
@@ -454,20 +528,30 @@ class ProjectRunner(
             }
 
             var finalHtml = baseHtml
-            if (!finalHtml.contains("/assets/index.css") && !finalHtml.contains("assets/index.css")) {
-                finalHtml = finalHtml.replace("</head>", "  <link rel=\"stylesheet\" href=\"/assets/index.css\" />\n</head>")
+            if (!finalHtml.contains("/assets/index-D7h5wQ1a.css") && !finalHtml.contains("assets/index-D7h5wQ1a.css")) {
+                if (finalHtml.contains("/assets/index.css")) {
+                    finalHtml = finalHtml.replace("/assets/index.css", "/assets/index-D7h5wQ1a.css")
+                } else if (finalHtml.contains("assets/index.css")) {
+                    finalHtml = finalHtml.replace("assets/index.css", "assets/index-D7h5wQ1a.css")
+                } else {
+                    finalHtml = finalHtml.replace("</head>", "  <link rel=\"stylesheet\" crossorigin href=\"/assets/index-D7h5wQ1a.css\" />\n</head>")
+                }
             }
-            finalHtml = finalHtml.replace(Regex("""<script[^>]*src=['"][^'"]*(?:main|index)\.[tj]sx?['"][^>]*></script>"""), "<script type=\"module\" src=\"/assets/index.js\"></script>")
-            if (!finalHtml.contains("/assets/index.js") && !finalHtml.contains("assets/index.js")) {
-                finalHtml = finalHtml.replace("</body>", "  <script type=\"module\" src=\"/assets/index.js\"></script>\n</body>")
+
+            finalHtml = finalHtml.replace(Regex("""<script[^>]*src=['"][^'"]*(?:main|index)\.[tj]sx?['"][^>]*></script>"""), "<script type=\"module\" crossorigin src=\"/assets/index-B9k3mZ2p.js\"></script>")
+            if (!finalHtml.contains("/assets/index-B9k3mZ2p.js") && !finalHtml.contains("assets/index-B9k3mZ2p.js")) {
+                if (finalHtml.contains("/assets/index.js")) {
+                    finalHtml = finalHtml.replace("/assets/index.js", "/assets/index-B9k3mZ2p.js")
+                } else if (finalHtml.contains("assets/index.js")) {
+                    finalHtml = finalHtml.replace("assets/index.js", "assets/index-B9k3mZ2p.js")
+                } else {
+                    finalHtml = finalHtml.replace("</body>", "  <script type=\"module\" crossorigin src=\"/assets/index-B9k3mZ2p.js\"></script>\n</body>")
+                }
             }
+
             File(distDir, "index.html").writeText(finalHtml)
 
-            // 3. Generate dist/assets/index.js
-            val jsContent = buildInAppJsBundle(workingDir)
-            File(assetsDir, "index.js").writeText(jsContent)
-
-            File(distDir, "index.html").exists() && File(assetsDir, "index.js").exists()
+            File(distDir, "index.html").exists() && File(assetsDir, "index-B9k3mZ2p.js").exists()
         } catch (e: Exception) {
             e.printStackTrace()
             false

@@ -316,7 +316,7 @@ fun ProjectScreen(
 
                     FilledTonalButton(
                         onClick = { onOpenPreview(viewModel.projectId) },
-                        enabled = isRunning || project?.status == ProjectStatus.RUNNING,
+                        enabled = (isRunning || project?.status == ProjectStatus.RUNNING) && activePort != null && project?.status != ProjectStatus.ERROR,
                         modifier = Modifier.weight(1.2f)
                     ) {
                         Icon(imageVector = Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(18.dp))

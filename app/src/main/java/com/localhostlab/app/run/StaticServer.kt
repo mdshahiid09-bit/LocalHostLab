@@ -1,11 +1,5 @@
 package com.localhostlab.app.run
 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.BufferedOutputStream
 import java.io.BufferedReader
 import java.io.File
@@ -14,26 +8,44 @@ import java.io.InputStreamReader
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketException
 import java.net.URLDecoder
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
+/**
+ * Local HTTP static server running on loopback (127.0.0.1).
+ * Uses a dedicated accept thread and a cached thread pool to handle
+ * multiple concurrent requests simultaneously (e.g. concurrent WebView asset loading).
+ * Stays alive until [stop] is explicitly called.
+ */
 class StaticServer(
-    private val staticDir: File,
-    private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO)
+    private val staticDir: File
 ) {
+    @Volatile
     private var serverSocket: ServerSocket? = null
-    private var serverJob: Job? = null
+
+    @Volatile
     var boundPort: Int = -1
         private set
 
+    private var acceptThread: Thread? = null
+    private var clientExecutor: ExecutorService? = null
+    private val isRunningFlag = AtomicBoolean(false)
+
     val isRunning: Boolean
-        get() = serverSocket != null && !(serverSocket?.isClosed ?: true)
+        get() = isRunningFlag.get() && serverSocket != null && !(serverSocket?.isClosed ?: true)
 
     /**
      * Starts listening on 127.0.0.1, scanning starting from [startPort] for the first free port.
+     * Uses a dedicated accept thread and cached thread pool for concurrent client handling.
      */
-    suspend fun start(startPort: Int = 3000): Result<Int> = withContext(Dispatchers.IO) {
+    @Synchronized
+    fun start(startPort: Int = 3000): Result<Int> {
         if (isRunning) {
-            return@withContext Result.success(boundPort)
+            return Result.success(boundPort)
         }
 
         var port = startPort
@@ -42,7 +54,8 @@ class StaticServer(
 
         while (port < 65535 && !bound) {
             try {
-                serverSocket = ServerSocket(port, 50, loopback)
+                // Backlog of 100 pending connections
+                serverSocket = ServerSocket(port, 100, loopback)
                 boundPort = port
                 bound = true
             } catch (e: Exception) {
@@ -50,113 +63,140 @@ class StaticServer(
             }
         }
 
-        if (!bound || serverSocket == null) {
-            return@withContext Result.failure(Exception("Unable to find an available port to bind HTTP server."))
+        val socket = serverSocket
+        if (!bound || socket == null) {
+            return Result.failure(Exception("Unable to find an available port to bind HTTP server on 127.0.0.1."))
         }
 
-        val socket = serverSocket!!
-        serverJob = scope.launch(Dispatchers.IO) {
-            while (isActive && !socket.isClosed) {
-                try {
-                    val clientSocket = socket.accept()
-                    launch(Dispatchers.IO) {
-                        handleClient(clientSocket)
-                    }
-                } catch (e: Exception) {
-                    if (socket.isClosed) break
-                }
+        isRunningFlag.set(true)
+
+        val executor = Executors.newCachedThreadPool { runnable ->
+            Thread(runnable).apply {
+                isDaemon = true
+                name = "StaticServer-Client-${System.currentTimeMillis()}"
             }
         }
+        clientExecutor = executor
 
-        Result.success(boundPort)
+        acceptThread = Thread({
+            while (isRunningFlag.get() && !socket.isClosed) {
+                try {
+                    val clientSocket = socket.accept()
+                    // Set client read timeout so slow or dropped connections don't hang worker threads
+                    clientSocket.soTimeout = 15000
+
+                    executor.execute {
+                        try {
+                            handleClient(clientSocket)
+                        } catch (e: Exception) {
+                            // Client connection reset or aborted; isolated per connection
+                        } finally {
+                            try {
+                                clientSocket.close()
+                            } catch (e: Exception) {
+                                // Ignored
+                            }
+                        }
+                    }
+                } catch (e: SocketException) {
+                    // Socket closed on stop()
+                    if (!isRunningFlag.get() || socket.isClosed) break
+                } catch (e: Exception) {
+                    if (!isRunningFlag.get() || socket.isClosed) break
+                }
+            }
+        }, "StaticServer-Accept-$boundPort").apply {
+            isDaemon = true
+            start()
+        }
+
+        return Result.success(boundPort)
     }
 
     private fun handleClient(client: Socket) {
-        try {
-            client.use { s ->
-                val reader = BufferedReader(InputStreamReader(s.getInputStream()))
-                val out = BufferedOutputStream(s.getOutputStream())
+        val reader = BufferedReader(InputStreamReader(client.getInputStream()))
+        val out = BufferedOutputStream(client.getOutputStream())
 
-                val requestLine = reader.readLine() ?: return
-                val parts = requestLine.split(" ")
-                if (parts.size < 2) return
+        val requestLine = reader.readLine() ?: return
+        val parts = requestLine.split(" ")
+        if (parts.size < 2) return
 
-                val method = parts[0].uppercase()
-                var rawUri = parts[1]
+        val method = parts[0].uppercase()
+        var rawUri = parts[1]
 
-                // Drain remaining request headers
-                var line = reader.readLine()
-                while (!line.isNullOrEmpty()) {
-                    line = reader.readLine()
-                }
-
-                val isHead = method == "HEAD"
-                val isGet = method == "GET"
-
-                if (!isGet && !isHead) {
-                    sendResponse(out, 405, "Method Not Allowed", "text/plain; charset=utf-8", "Method Not Allowed".toByteArray(), isHead = false)
-                    return
-                }
-
-                // Strip query parameters
-                val queryIndex = rawUri.indexOf('?')
-                if (queryIndex != -1) {
-                    rawUri = rawUri.substring(0, queryIndex)
-                }
-
-                val decodedPath = try {
-                    URLDecoder.decode(rawUri, "UTF-8")
-                } catch (e: Exception) {
-                    rawUri
-                }
-
-                val targetPath = if (decodedPath == "/" || decodedPath.isEmpty()) "/index.html" else decodedPath
-                var fileToServe = File(staticDir, targetPath.removePrefix("/"))
-
-                // Path traversal check
-                val canonicalStaticDir = staticDir.canonicalPath
-                if (fileToServe.exists() && !fileToServe.canonicalPath.startsWith(canonicalStaticDir)) {
-                    sendResponse(out, 403, "Forbidden", "text/plain; charset=utf-8", "Access Denied".toByteArray(), isHead)
-                    return
-                }
-
-                // Base path / subpath tolerance (e.g. /nexfolio/assets/ or /subpath/assets/)
-                if (!fileToServe.exists() && targetPath.contains("/assets/")) {
-                    val assetSub = "assets/" + targetPath.substringAfter("/assets/")
-                    val candidate = File(staticDir, assetSub)
-                    if (candidate.exists() && candidate.isFile && candidate.canonicalPath.startsWith(canonicalStaticDir)) {
-                        fileToServe = candidate
-                    }
-                }
-
-                // SPA Fallback:
-                // If the exact file doesn't exist, check whether it's an unknown client-side route
-                // or if it's an asset. If not an existing file, fallback to dist/index.html.
-                if (!fileToServe.exists() || fileToServe.isDirectory) {
-                    val isAssetRequest = targetPath.startsWith("/assets/") || targetPath.contains("/assets/") ||
-                            (targetPath.substringAfterLast('/').contains('.') && !targetPath.endsWith(".html"))
-
-                    if (!isAssetRequest) {
-                        val indexFile = File(staticDir, "index.html")
-                        if (indexFile.exists() && indexFile.isFile) {
-                            fileToServe = indexFile
-                        }
-                    }
-                }
-
-                if (!fileToServe.exists() || !fileToServe.isFile) {
-                    val notFoundMsg = "<!doctype html><html><head><title>404 Not Found</title></head><body><h1>404 Not Found</h1><p>LocalHostLab: File not found in dist/: ${fileToServe.name}</p></body></html>"
-                    sendResponse(out, 404, "Not Found", "text/html; charset=utf-8", notFoundMsg.toByteArray(), isHead)
-                    return
-                }
-
-                val mimeType = getMimeType(fileToServe.extension)
-                val fileBytes = FileInputStream(fileToServe).use { it.readBytes() }
-                sendResponse(out, 200, "OK", mimeType, fileBytes, isHead)
-            }
-        } catch (e: Exception) {
-            // Client connection closed or aborted
+        // Drain request headers
+        var line = reader.readLine()
+        while (!line.isNullOrEmpty()) {
+            line = reader.readLine()
         }
+
+        val isHead = method == "HEAD"
+        val isGet = method == "GET"
+
+        if (!isGet && !isHead) {
+            sendResponse(out, 405, "Method Not Allowed", "text/plain; charset=utf-8", "Method Not Allowed".toByteArray(), isHead = false)
+            return
+        }
+
+        // Strip query parameters and fragment
+        val queryIndex = rawUri.indexOf('?')
+        if (queryIndex != -1) {
+            rawUri = rawUri.substring(0, queryIndex)
+        }
+        val hashIndex = rawUri.indexOf('#')
+        if (hashIndex != -1) {
+            rawUri = rawUri.substring(0, hashIndex)
+        }
+
+        val decodedPath = try {
+            URLDecoder.decode(rawUri, "UTF-8")
+        } catch (e: Exception) {
+            rawUri
+        }
+
+        val targetPath = if (decodedPath == "/" || decodedPath.isEmpty()) "/index.html" else decodedPath
+        var fileToServe = File(staticDir, targetPath.removePrefix("/"))
+
+        // Path traversal check
+        val canonicalStaticDir = staticDir.canonicalPath
+        if (fileToServe.exists() && !fileToServe.canonicalPath.startsWith(canonicalStaticDir)) {
+            sendResponse(out, 403, "Forbidden", "text/plain; charset=utf-8", "Access Denied".toByteArray(), isHead)
+            return
+        }
+
+        // Subpath / base tolerance: if requested /project/assets/..., resolve to assets/...
+        if (!fileToServe.exists() && targetPath.contains("/assets/")) {
+            val assetSub = "assets/" + targetPath.substringAfter("/assets/")
+            val candidate = File(staticDir, assetSub)
+            if (candidate.exists() && candidate.isFile && candidate.canonicalPath.startsWith(canonicalStaticDir)) {
+                fileToServe = candidate
+            }
+        }
+
+        // SPA Fallback:
+        // Only non-asset paths (HTML navigation / client routes) fallback to index.html.
+        // Asset requests must 404 if missing, so browsers do not misinterpret HTML as JS or CSS.
+        if (!fileToServe.exists() || fileToServe.isDirectory) {
+            val isAssetRequest = targetPath.startsWith("/assets/") || targetPath.contains("/assets/") ||
+                    (targetPath.substringAfterLast('/').contains('.') && !targetPath.endsWith(".html"))
+
+            if (!isAssetRequest) {
+                val indexFile = File(staticDir, "index.html")
+                if (indexFile.exists() && indexFile.isFile) {
+                    fileToServe = indexFile
+                }
+            }
+        }
+
+        if (!fileToServe.exists() || !fileToServe.isFile) {
+            val notFoundMsg = "<!doctype html><html><head><title>404 Not Found</title></head><body><h1>404 Not Found</h1><p>LocalHostLab: File not found in dist/: ${fileToServe.name}</p></body></html>"
+            sendResponse(out, 404, "Not Found", "text/html; charset=utf-8", notFoundMsg.toByteArray(), isHead)
+            return
+        }
+
+        val mimeType = getMimeType(fileToServe.extension)
+        val fileBytes = FileInputStream(fileToServe).use { it.readBytes() }
+        sendResponse(out, 200, "OK", mimeType, fileBytes, isHead)
     }
 
     private fun sendResponse(
@@ -180,7 +220,7 @@ class StaticServer(
         out.flush()
     }
 
-    private fun getMimeType(extension: String): String {
+    fun getMimeType(extension: String): String {
         return when (extension.lowercase()) {
             "html", "htm" -> "text/html; charset=utf-8"
             "css" -> "text/css; charset=utf-8"
@@ -210,16 +250,36 @@ class StaticServer(
         }
     }
 
-    suspend fun stop() = withContext(Dispatchers.IO) {
+    @Synchronized
+    fun stop() {
+        if (!isRunningFlag.getAndSet(false)) {
+            return
+        }
+
         try {
-            serverJob?.cancel()
             serverSocket?.close()
         } catch (e: Exception) {
-            e.printStackTrace()
+            // Ignored
         } finally {
             serverSocket = null
-            serverJob = null
             boundPort = -1
         }
+
+        try {
+            acceptThread?.interrupt()
+        } catch (e: Exception) {
+            // Ignored
+        }
+        acceptThread = null
+
+        clientExecutor?.let { executor ->
+            try {
+                executor.shutdownNow()
+                executor.awaitTermination(500, TimeUnit.MILLISECONDS)
+            } catch (e: Exception) {
+                // Ignored
+            }
+        }
+        clientExecutor = null
     }
 }
