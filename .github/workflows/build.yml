@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   build:
@@ -29,12 +30,13 @@ jobs:
 
       - name: Generate Gradle Wrapper
         run: |
-          gradle wrapper --gradle-version 8.7
+          gradle wrapper --gradle-version 8.7 > build.log 2>&1 || (cat build.log && exit 1)
           chmod +x gradlew
           ls -lh gradle/wrapper/
 
       - name: Build Debug APK
-        run: gradle assembleDebug --stacktrace --info
+        run: |
+          gradle assembleDebug --stacktrace --info > build.log 2>&1 || (cat build.log && exit 1)
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
@@ -58,3 +60,25 @@ jobs:
           files: app/build/outputs/apk/debug/app-debug.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Report Build Failure to Issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let logContent = 'No build.log file was generated (failure occurred before build step).';
+            if (fs.existsSync('build.log')) {
+              try {
+                const fullLog = fs.readFileSync('build.log', 'utf8');
+                logContent = fullLog.length > 50000 ? fullLog.slice(-50000) : fullLog;
+              } catch (e) {
+                logContent = 'Failed to read build.log: ' + e.message;
+              }
+            }
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `CI Build Failure: Run #${context.runNumber} (${context.sha.substring(0, 7)})`,
+              body: `### Build Failure on Run #${context.runNumber}\n**Commit:** ${context.sha}\n**Workflow:** ${context.workflow}\n\n#### Log Output:\n\`\`\`text\n${logContent}\n\`\`\``
+            });
